@@ -43,26 +43,30 @@ function parseQuoteLine(raw: string): Quote | null {
   const line = raw.trim();
   if (!line) return null;
 
-  // ── 1. Multi-speaker detection ──────────────────────────────────────────
-  // Fires when 2+ Name: "text" segments are found AND turns are separated
-  // by a tab or 2+ consecutive spaces (the visual marker used in personal QBs).
-  if (/\t| {2,}/.test(line)) {
+  // ── 1. Speaker detection (single or multi) ──────────────────────────────
+  // Run SPEAKER_RE unconditionally to collect all Name: "text" segments.
+  // Multi-speaker: 2+ segments separated by tab / 2+ spaces.
+  // Single-speaker: exactly 1 segment starting at position 0 (e.g. Jon: "Quote").
+  {
     SPEAKER_RE.lastIndex = 0;
     const speakers: string[] = [];
     const turns: string[] = [];
+    let firstMatchIdx = -1;
     let m: RegExpExecArray | null;
     while ((m = SPEAKER_RE.exec(line)) !== null) {
-      const name = m[1].trim();
-      const text = m[2].trim();
-      speakers.push(name);
-      turns.push(`"${text}"`);
+      if (firstMatchIdx < 0) firstMatchIdx = m.index;
+      speakers.push(m[1].trim());
+      turns.push(m[2].trim());
     }
-    if (speakers.length >= 2) {
+    if (speakers.length >= 2 && /\t| {2,}/.test(line)) {
       return {
-        text: turns.join('\n'),
+        text: turns.map(t => `"${t}"`).join('\n'),
         author: dedupe(speakers).join(', '),
-        sortAuthor: speakers[speakers.length - 1], // last speaker drives bracket grouping
+        sortAuthor: speakers[speakers.length - 1],
       };
+    }
+    if (speakers.length === 1 && firstMatchIdx === 0) {
+      return { text: turns[0], author: speakers[0] };
     }
   }
 

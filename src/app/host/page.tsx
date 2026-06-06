@@ -6,6 +6,15 @@ import Link from 'next/link';
 import { Quote } from '@/lib/types';
 import { parseQuotebook, truncate } from '@/lib/gameLogic';
 
+function previewQuote(text: string, maxLen: number): string {
+  if (text.includes('\n')) {
+    return text.split('\n').map(l => truncate(l, maxLen)).join(' / ');
+  }
+  const t = truncate(text, maxLen);
+  const hasQuotes = t.includes('"') || t.includes('“') || t.includes('”');
+  return hasQuotes ? t : `"${t}"`;
+}
+
 export default function HostSetupPage() {
   const router = useRouter();
   const fileRef = useRef<HTMLInputElement>(null);
@@ -115,6 +124,10 @@ export default function HostSetupPage() {
                 <td><code>Quote text</code> <span className="text-muted text-xs">(author shown as Unknown)</span></td>
               </tr>
               <tr>
+                <td>Single speaker</td>
+                <td><code>Name: "Quote text"</code></td>
+              </tr>
+              <tr>
                 <td>Multi-speaker exchange</td>
                 <td><code>Name: "text"[Tab]Name: "text"</code></td>
               </tr>
@@ -150,7 +163,7 @@ export default function HostSetupPage() {
           <div className="card qb-details-body">
             {quotes.slice(0, 10).map((q, i) => (
               <p key={i} className="text-sm" style={{ padding: '0.25rem 0', borderBottom: '1px solid var(--border)' }}>
-                <em>"{truncate(q.text, 80)}"</em>
+                <em>{previewQuote(q.text, 80)}</em>
                 <span className="text-muted"> — {q.author}</span>
               </p>
             ))}
