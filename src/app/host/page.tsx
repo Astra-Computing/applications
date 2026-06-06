@@ -13,6 +13,10 @@ export default function HostSetupPage() {
   const [fileName, setFileName] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [tipsOpen, setTipsOpen] = useState(true);
+  const [previewOpen, setPreviewOpen] = useState(false);
+
+  const hasQuotes = quotes.length >= 2;
 
   function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -24,17 +28,19 @@ export default function HostSetupPage() {
       const text = ev.target?.result as string;
       const parsed = parseQuotebook(text);
       if (parsed.length < 2) {
-        setError('Need at least 2 quotes. Check file format: "Quote text" - Author Name');
+        setError('Need at least 2 quotes. Check the Tips below for supported formats.');
         setQuotes([]);
       } else {
         setQuotes(parsed);
+        setTipsOpen(false);
+        setPreviewOpen(true);
       }
     };
     reader.readAsText(file);
   }
 
   async function handleCreate() {
-    if (quotes.length < 2) return;
+    if (!hasQuotes) return;
     setLoading(true);
     try {
       const res = await fetch('/api/game/create', {
@@ -69,44 +75,100 @@ export default function HostSetupPage() {
             ? <p style={{ color: 'var(--text)' }}>{fileName}</p>
             : <p className="text-muted">Click to choose a .txt file</p>
           }
-          <p className="text-xs text-muted mt-1">Format: <code style={{ color: 'var(--accent)' }}>"Quote text" - Author Name</code></p>
         </div>
       </div>
 
       {error && <div className="alert alert-error mt-2">{error}</div>}
 
-      {quotes.length >= 2 && (
-        <div className="mt-3">
-          <p className="text-sm" style={{ marginBottom: '0.75rem' }}>
-            <strong style={{ color: 'var(--accent)' }}>{quotes.length}</strong> quotes parsed
-            {quotes.length % 2 === 1 && <span className="text-muted"> (1 BYE will be added)</span>}
-          </p>
-
-          <details>
-            <summary style={{ cursor: 'pointer', color: 'var(--muted)', fontSize: '0.88rem', marginBottom: '0.5rem' }}>
-              Preview first 10 quotes
-            </summary>
-            <div className="card mt-1" style={{ padding: '1rem' }}>
-              {quotes.slice(0, 10).map((q, i) => (
-                <p key={i} className="text-sm" style={{ padding: '0.25rem 0', borderBottom: '1px solid var(--border)' }}>
-                  <em>"{truncate(q.text, 80)}"</em>
-                  <span className="text-muted"> — {q.author}</span>
-                </p>
-              ))}
-              {quotes.length > 10 && (
-                <p className="text-xs text-muted mt-1">…and {quotes.length - 10} more</p>
-              )}
-            </div>
-          </details>
-
-          <button
-            className={`btn btn-primary btn-full mt-3${loading ? ' waiting-shimmer' : ''}`}
-            onClick={handleCreate}
-            disabled={loading}
-          >
-            {loading ? 'Creating…' : 'Create Game'}
-          </button>
+      {/* Tips dropdown — expanded by default, compacts after upload */}
+      <details
+        className="qb-details mt-3"
+        open={tipsOpen}
+        onToggle={e => setTipsOpen((e.target as HTMLDetailsElement).open)}
+      >
+        <summary className="qb-summary">Tips — formatting your quotebook</summary>
+        <div className="card qb-details-body">
+          <p className="qb-big-rule">One quote per line — blank lines are ignored.</p>
+          <table className="qb-table">
+            <thead>
+              <tr><th>Format</th><th>Example</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Quoted + hyphen</td>
+                <td><code>"Quote text" - Author</code></td>
+              </tr>
+              <tr>
+                <td>Quoted + em dash</td>
+                <td><code>"Quote text" — Author</code></td>
+              </tr>
+              <tr>
+                <td>Quoted, no attribution</td>
+                <td><code>"Quote text"</code></td>
+              </tr>
+              <tr>
+                <td>Unquoted + attribution</td>
+                <td><code>Quote text - Author</code></td>
+              </tr>
+              <tr>
+                <td>Plain text</td>
+                <td><code>Quote text</code> <span className="text-muted text-xs">(author shown as Unknown)</span></td>
+              </tr>
+              <tr>
+                <td>Multi-speaker exchange</td>
+                <td><code>Name: "text"[Tab]Name: "text"</code></td>
+              </tr>
+            </tbody>
+          </table>
         </div>
+      </details>
+
+      {/* Preview dropdown — inactive until a file is uploaded */}
+      <details
+        className={`qb-details mt-2${!hasQuotes ? ' qb-details-inactive' : ''}`}
+        open={previewOpen}
+        onToggle={e => {
+          if (!hasQuotes) { e.preventDefault(); return; }
+          setPreviewOpen((e.target as HTMLDetailsElement).open);
+        }}
+      >
+        <summary
+          className="qb-summary"
+          onClick={!hasQuotes ? e => e.preventDefault() : undefined}
+        >
+          {hasQuotes ? (
+            <>
+              Preview —{' '}
+              <strong style={{ color: 'var(--accent)' }}>{quotes.length}</strong> quotes parsed
+              {quotes.length % 2 === 1 && <span className="text-muted"> (1 BYE will be added)</span>}
+            </>
+          ) : (
+            'Preview — upload a file first'
+          )}
+        </summary>
+        {hasQuotes && (
+          <div className="card qb-details-body">
+            {quotes.slice(0, 10).map((q, i) => (
+              <p key={i} className="text-sm" style={{ padding: '0.25rem 0', borderBottom: '1px solid var(--border)' }}>
+                <em>"{truncate(q.text, 80)}"</em>
+                <span className="text-muted"> — {q.author}</span>
+              </p>
+            ))}
+            {quotes.length > 10 && (
+              <p className="text-xs text-muted mt-1">…and {quotes.length - 10} more</p>
+            )}
+          </div>
+        )}
+      </details>
+
+      {hasQuotes && (
+        <button
+          className={`btn btn-primary btn-full mt-3${loading ? ' waiting-shimmer' : ''}`}
+          onClick={handleCreate}
+          disabled={loading}
+        >
+          {loading ? 'Creating…' : 'Create Game'}
+        </button>
       )}
     </main>
   );

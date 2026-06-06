@@ -522,6 +522,76 @@ label { font-size: 0.88rem; color: var(--muted); display: block; margin-bottom: 
 }
 .bmc-btn:hover { background: var(--accent); color: #fff; border-color: var(--accent); }
 
+/* ── Quotebook dropdowns (host setup page) ──────────────────────────────────── */
+.qb-details { border-radius: 10px; overflow: hidden; }
+.qb-details[open] > .qb-summary { border-bottom: 1px solid var(--border); border-radius: 10px 10px 0 0; }
+.qb-summary {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.65rem 1rem;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-size: 0.88rem;
+  font-weight: 500;
+  color: var(--text);
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+.qb-summary::-webkit-details-marker { display: none; }
+.qb-summary::before {
+  content: '▶';
+  font-size: 0.6rem;
+  color: var(--muted);
+  transition: transform 0.15s;
+  flex-shrink: 0;
+}
+.qb-details[open] > .qb-summary::before { transform: rotate(90deg); }
+.qb-details-inactive > .qb-summary { color: var(--muted); cursor: default; }
+.qb-details-inactive > .qb-summary::before { opacity: 0.35; }
+.qb-details-body {
+  border-radius: 0 0 10px 10px;
+  border-top: none;
+  padding: 1rem 1.25rem;
+}
+.qb-big-rule {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--accent);
+  margin-bottom: 0.85rem;
+}
+.qb-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.83rem;
+}
+.qb-table th {
+  text-align: left;
+  color: var(--muted);
+  font-weight: 500;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  padding: 0 0.5rem 0.5rem;
+  border-bottom: 1px solid var(--border);
+}
+.qb-table td {
+  padding: 0.4rem 0.5rem;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+  color: var(--text);
+}
+.qb-table tr:last-child td { border-bottom: none; }
+.qb-table code {
+  font-size: 0.82rem;
+  color: var(--accent);
+  background: rgba(79,142,247,0.08);
+  padding: 0.1rem 0.35rem;
+  border-radius: 4px;
+}
+
 /* ── Version button ─────────────────────────────────────────────────────────── */
 .version-btn {
   background: none;
