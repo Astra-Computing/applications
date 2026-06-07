@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { createPortal } from 'react-dom';
 
 const HISTORY = [
+  { v: '0.2.4', note: 'Bug fixes' },
   { v: '0.2.3', note: 'Added single-speaker quote format; fixed preview quoting' },
   { v: '0.2.2', note: 'Added tips to quotebook parser' },
   { v: '0.2.1', note: 'Pre-alpha launch' },

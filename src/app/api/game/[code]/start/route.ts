@@ -15,11 +15,11 @@ export async function POST(req: NextRequest, { params }: { params: { code: strin
   let phaseError = false;
   const state = await loadAndUpdate(code, s => {
     if (s.hostToken !== hostToken) { authError = true; return s; }
-    if (s.status !== 'lobby') { phaseError = true; return s; }
+    if (s.status !== 'lobby' && s.status !== 'results') { phaseError = true; return s; }
     return startVoting(s);
   });
   if (!state)    return NextResponse.json({ error: 'Room not found' }, { status: 404 });
   if (authError) return NextResponse.json({ error: 'Unauthorised' }, { status: 401 });
-  if (phaseError) return NextResponse.json({ error: 'Game is not in lobby' }, { status: 409 });
+  if (phaseError) return NextResponse.json({ error: 'Game cannot be started from current phase' }, { status: 409 });
   return NextResponse.json({ ok: true });
 }
