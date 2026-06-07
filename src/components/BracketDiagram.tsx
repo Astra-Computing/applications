@@ -40,21 +40,25 @@ export default function BracketDiagram({ rounds, currentRound }: Props) {
 
   // Pre-compute the effective center Y for every matchup.
   // When a matchup's only feeder from the previous round is a lone BYE box,
-  // this matchup is repositioned to that BYE box's natural Y — keeping the
+  // this matchup is repositioned to that BYE box's actual Y — keeping the
   // first-round spacing intact and producing a straight horizontal connector.
-  const cyGrid: number[][] = rounds.map((round, rIdx) => {
-    return round.map((_, mIdx) => {
+  // Built row-by-row so chained BYEs inherit the already-adjusted Y rather
+  // than the formula default (which would place them progressively too low).
+  const cyGrid: number[][] = [];
+  for (let rIdx = 0; rIdx < rounds.length; rIdx++) {
+    const row: number[] = [];
+    for (let mIdx = 0; mIdx < rounds[rIdx].length; mIdx++) {
       if (rIdx > 0) {
-        const prevRound = rounds[rIdx - 1];
         const loneFeederIdx = 2 * mIdx;
-        // True when the previous round's only feeder for this slot is unpaired
-        if (prevRound.length === loneFeederIdx + 1) {
-          return matchupCenterY(loneFeederIdx, rIdx - 1, firstRoundCount);
+        if (rounds[rIdx - 1].length === loneFeederIdx + 1) {
+          row.push(cyGrid[rIdx - 1][loneFeederIdx]);
+          continue;
         }
       }
-      return matchupCenterY(mIdx, rIdx, firstRoundCount);
-    });
-  });
+      row.push(matchupCenterY(mIdx, rIdx, firstRoundCount));
+    }
+    cyGrid.push(row);
+  }
 
   // SVG dimensions — lone feeders may sit below the default first-round height
   const maxCy = Math.max(...cyGrid.flat());

@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { createPortal } from 'react-dom';
 
 const HISTORY = [
+  { v: '0.2.6', note: 'Fixed bracket BYE alignment for chained byes' },
   { v: '0.2.5', note: 'Improved reliability for gained/lost players' },
   { v: '0.2.4', note: 'Bug fixes' },
   { v: '0.2.3', note: 'Fixed preview quoting; enhanced parser' },
