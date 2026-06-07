@@ -19,12 +19,17 @@ function JoinForm() {
     setError('');
     setLoading(true);
     try {
+      const raw = sessionStorage.getItem(`uq_session_${trimCode}`);
+      const saved = raw ? JSON.parse(raw) as { name: string; token: string } : null;
+      const existingToken = saved?.name === trimName ? saved.token : undefined;
+
       const res = await fetch(`/api/game/${trimCode}/join`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: trimName }),
+        body: JSON.stringify({ name: trimName, existingToken }),
       });
       if (res.status === 404) { setError('Room not found. Check the code and try again.'); setLoading(false); return; }
+      if (res.status === 409) { setError('That name is already taken. Please choose a different one.'); setLoading(false); return; }
       if (!res.ok) { setError('Something went wrong.'); setLoading(false); return; }
       const { token } = await res.json();
       sessionStorage.setItem(`uq_session_${trimCode}`, JSON.stringify({ name: trimName, token }));

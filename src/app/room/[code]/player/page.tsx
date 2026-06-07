@@ -4,7 +4,7 @@ import { Suspense, useEffect, useRef, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import dynamic from 'next/dynamic';
 import { GameStatePublic, MatchupPublic } from '@/lib/types';
-import { truncate } from '@/lib/gameLogic';
+import { truncate, PLAYER_TIMEOUT_MS } from '@/lib/gameLogic';
 import QuoteCard from '@/components/QuoteCard';
 import BuyMeACoffee from '@/components/BuyMeACoffee';
 
@@ -187,6 +187,9 @@ function PlayerView() {
       {state.status === 'voting' && (() => {
         const realMatchups = state.matchups.filter((m: MatchupPublic) => m.a && m.b);
         const voteCount = realMatchups.filter((m: MatchupPublic) => m.myVote !== null).length;
+        const now = Date.now();
+        const activeCount = Object.values(state.participants).filter((ts: number) => now - ts < PLAYER_TIMEOUT_MS).length;
+        const allCast = activeCount > 0 && realMatchups.every((m: MatchupPublic) => m.votes.a + m.votes.b >= activeCount);
 
         return (
           <>
@@ -234,7 +237,11 @@ function PlayerView() {
             })}
 
             {voteCount === realMatchups.length && (
-              <div className="alert alert-success"><span className="waiting-shimmer">All votes cast! Waiting for the host…</span></div>
+              <div className="alert alert-success">
+                <span className="waiting-shimmer">
+                  {allCast ? 'All votes cast! Waiting for host.' : 'You voted! Waiting for a few more votes.'}
+                </span>
+              </div>
             )}
           </>
         );
