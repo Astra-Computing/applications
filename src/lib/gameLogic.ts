@@ -99,12 +99,17 @@ export function castVote(state: GameState, matchupIndex: number, playerName: str
   return { ...state, matchups };
 }
 
-export function allVoted(state: GameState): boolean {
-  const participants = new Set(Object.keys(state.participants));
+export const PLAYER_TIMEOUT_MS = 24_000;
+
+export function allVoted(state: GameState, now = Date.now()): boolean {
+  const active = Object.entries(state.participants)
+    .filter(([, ts]) => now - ts < PLAYER_TIMEOUT_MS)
+    .map(([name]) => name);
+  if (active.length === 0) return false;
   for (const m of state.matchups) {
     if (m.a === null || m.b === null) continue;
     const voted = new Set([...m.votes.a, ...m.votes.b]);
-    for (const p of Array.from(participants)) {
+    for (const p of active) {
       if (!voted.has(p)) return false;
     }
   }

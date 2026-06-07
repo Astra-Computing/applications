@@ -156,7 +156,12 @@ function PlayerView() {
     }
   }
 
-  if (error) return <main className="page"><div className="alert alert-error">{error}</div></main>;
+  if (error) return (
+    <main className="page">
+      <div className="alert alert-error">{error}</div>
+      <button className="btn mt-3" onClick={() => router.push('/')}>Go Home</button>
+    </main>
+  );
   if (!state || !name) return <main className="page"><p className="text-muted waiting-shimmer">Connecting…</p></main>;
 
   return (

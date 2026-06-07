@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { createPortal } from 'react-dom';
 
 const HISTORY = [
+  { v: '0.2.5', note: 'Hide author until champion revealed; fix voting stall on player disconnect; Go Home button on disconnect screen' },
   { v: '0.2.4', note: 'Bug fixes' },
   { v: '0.2.3', note: 'Added single-speaker quote format; fixed preview quoting' },
   { v: '0.2.2', note: 'Added tips to quotebook parser' },

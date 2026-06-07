@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import dynamic from 'next/dynamic';
 import { GameState, Matchup } from '@/lib/types';
-import { allVoted, getVoteCounts, truncate } from '@/lib/gameLogic';
+import { allVoted, getVoteCounts, truncate, PLAYER_TIMEOUT_MS } from '@/lib/gameLogic';
 import QuoteCard from '@/components/QuoteCard';
 import VoteBar from '@/components/VoteBar';
 import BuyMeACoffee from '@/components/BuyMeACoffee';
@@ -93,7 +93,12 @@ export default function HostPage() {
     }
   }
 
-  if (error) return <main className="page"><div className="alert alert-error">{error}</div></main>;
+  if (error) return (
+    <main className="page">
+      <div className="alert alert-error">{error}</div>
+      <button className="btn mt-3" onClick={() => router.push('/')}>Go Home</button>
+    </main>
+  );
   if (!state) return <main className="page"><p className="text-muted waiting-shimmer">Connecting…</p></main>;
 
   const participants = Object.keys(state.participants);
@@ -192,7 +197,8 @@ export default function HostPage() {
                 );
               }
               const [va, vb] = getVoteCounts(m);
-              const total = participants.length;
+              const now = Date.now();
+              const total = participants.filter(p => now - state.participants[p] < PLAYER_TIMEOUT_MS).length;
               return (
                 <div key={i} style={{ marginBottom: '1.5rem' }}>
                   <p className="match-header">Match {i + 1} — {va + vb}/{total} voted</p>
@@ -243,7 +249,7 @@ export default function HostPage() {
                       <div className="result-arrow">→</div>
                       <div className="result-winner">
                         "{truncate(winner.text, 55)}"
-                        <span className="result-score"> — {winner.author} · {wv}–{lv}</span>
+                        <span className="result-score"> — {wv}–{lv}</span>
                       </div>
                     </div>
                   );
