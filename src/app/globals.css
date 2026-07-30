@@ -368,19 +368,19 @@ label { font-size: 0.88rem; color: var(--muted); display: block; margin-bottom: 
 .wave-layer-light {
   background-image: url('/waves/wave-below-light.svg');
   background-size: 6400px 100%;
-  animation: wave-drift-light 105s linear infinite;
+  animation: wave-drift-light 144s linear infinite;
   z-index: 1;
 }
 .wave-layer-medium {
   background-image: url('/waves/wave-below-medium.svg');
   background-size: 3200px 100%;
-  animation: wave-drift-medium 97.5s linear infinite;
+  animation: wave-drift-medium 60s linear infinite;
   z-index: 2;
 }
 .wave-layer-dark {
   background-image: url('/waves/wave-below-dark.svg');
   background-size: 1600px 100%;
-  animation: wave-drift-dark 16s linear infinite;
+  animation: wave-drift-dark 25s linear infinite;
   z-index: 3;
 }
 .wave-banner-flip .wave-layer-light  { background-image: url('/waves/wave-above-light.svg'); }
