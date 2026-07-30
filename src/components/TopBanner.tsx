@@ -1,12 +1,17 @@
 'use client';
 import { usePathname } from 'next/navigation';
+import Link from 'next/link';
+import WaveBanner from './WaveBanner';
 
 export default function TopBanner() {
   const pathname = usePathname();
   if (pathname === '/') return null;
   return (
-    <div className="banner-top">
-      <img src="/UQTG002.png" alt="[UN]Quotable — The Game" />
-    </div>
+    <WaveBanner variant="slim">
+      <Link href="/" className="banner-top-brand">
+        <img src="/UQTG004.png" alt="[UN]" className="banner-top-brand-img" />
+        <span className="banner-top-brand-text">Quotable — The Game</span>
+      </Link>
+    </WaveBanner>
   );
 }

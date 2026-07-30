@@ -347,34 +347,92 @@ label { font-size: 0.88rem; color: var(--muted); display: block; margin-bottom: 
 .root-body { display: flex; flex-direction: column; min-height: 100vh; }
 .root-content { flex: 1; }
 
-/* ── Home full-width logo banner ───────────────────────────────────────────── */
-.banner-home-wrap { width: 100%; line-height: 0; position: relative; }
-.banner-home-wrap > img { width: 100%; display: block; animation: fadeIn 0.3s ease both; }
+/* ── Animated wave banners (replace static header/footer images) ───────────── */
+/* Layer stack, back → front: light (breaks to black at its own wavy edge) →
+   medium → dark. Each front layer's wave crests overlap and hide the layer
+   behind it, so darker colours win wherever they reach — the darkest layer
+   is also the fastest, matching a foreground/parallax read. */
+.wave-banner {
+  position: relative;
+  width: 100%;
+  overflow: hidden;
+}
+.wave-banner-hero { aspect-ratio: 2000 / 859; }
+.wave-banner-slim { aspect-ratio: 2000 / 356; }
+
+.wave-layer {
+  position: absolute;
+  inset: 0;
+  background-repeat: repeat-x;
+}
+.wave-layer-light {
+  background-image: url('/waves/wave-below-light.svg');
+  background-size: 6400px 100%;
+  animation: wave-drift-light 105s linear infinite;
+  z-index: 1;
+}
+.wave-layer-medium {
+  background-image: url('/waves/wave-below-medium.svg');
+  background-size: 3200px 100%;
+  animation: wave-drift-medium 97.5s linear infinite;
+  z-index: 2;
+}
+.wave-layer-dark {
+  background-image: url('/waves/wave-below-dark.svg');
+  background-size: 1600px 100%;
+  animation: wave-drift-dark 16s linear infinite;
+  z-index: 3;
+}
+.wave-banner-flip .wave-layer-light  { background-image: url('/waves/wave-above-light.svg'); }
+.wave-banner-flip .wave-layer-medium { background-image: url('/waves/wave-above-medium.svg'); }
+.wave-banner-flip .wave-layer-dark   { background-image: url('/waves/wave-above-dark.svg'); }
+
+/* Non-zero starting offsets so the three layers don't phase-align on load. */
+@keyframes wave-drift-light {
+  from { background-position-x: 4800px; }
+  to   { background-position-x: 11200px; }
+}
+@keyframes wave-drift-medium {
+  from { background-position-x: 1150px; }
+  to   { background-position-x: 4350px; }
+}
+@keyframes wave-drift-dark {
+  from { background-position-x: 240px; }
+  to   { background-position-x: 1840px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .wave-layer { animation: none; }
+}
 
 /* ── Home banner title animation ───────────────────────────────────────────── */
 .banner-title-overlay {
   position: absolute;
   inset: 0;
+  z-index: 3;
   display: flex;
   align-items: center;
   justify-content: center;
   pointer-events: none;
+  padding: 0 4%;
 }
 .banner-title-row {
   display: flex;
   align-items: center;
-  font-size: clamp(2rem, 5vw, 3.5rem);
+  gap: 0.3em;
+  font-size: clamp(1.1rem, 6vw, 3.5rem);
+  max-width: 100%;
   transform: translateY(-0.5em);
 }
 .banner-title-img {
-  height: clamp(3rem, 7.5vw, 5.25rem);
+  height: clamp(1.7rem, 9vw, 5.25rem);
   width: auto;
   display: block;
+  flex-shrink: 0;
   animation: fadeIn 0.25s ease 0.1s both;
 }
 .banner-title-typed {
   font-family: var(--font-serif);
-  font-size: clamp(2rem, 5vw, 3.5rem);
+  font-size: clamp(1.1rem, 6vw, 3.5rem);
   color: #fff;
   white-space: nowrap;
   line-height: 1;
@@ -422,14 +480,34 @@ label { font-size: 0.88rem; color: var(--muted); display: block; margin-bottom: 
 }
 
 /* ── Small top banner (all pages except home) ──────────────────────────────── */
-.banner-top { width: 100%; line-height: 0; }
-.banner-top img { width: 100%; display: block; }
+.banner-top-brand {
+  position: absolute;
+  top: 50%;
+  left: 4%;
+  z-index: 3;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  gap: 0.4em;
+  text-decoration: none;
+  color: #fff;
+}
+.banner-top-brand-img {
+  height: clamp(1.2rem, 4.5vw, 2.1rem);
+  width: auto;
+  display: block;
+}
+.banner-top-brand-text {
+  font-family: var(--font-serif);
+  font-size: clamp(0.8rem, 2.6vw, 1.35rem);
+  white-space: nowrap;
+  line-height: 1;
+}
 
 /* ── Bottom banner with version overlay ────────────────────────────────────── */
-.banner-bottom-wrap { position: relative; width: 100%; line-height: 0; }
-.banner-bottom-wrap img { width: 100%; display: block; }
 .banner-bottom-info {
   position: absolute;
+  z-index: 3;
   bottom: 26%;
   right: 1.5rem;
   transform: translateY(1em);

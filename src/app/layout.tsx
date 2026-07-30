@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from 'next';
 import './globals.css';
 import TopBanner from '@/components/TopBanner';
 import VersionButton from '@/components/VersionButton';
+import WaveBanner from '@/components/WaveBanner';
 
 export const metadata: Metadata = {
   title: '[UN]Quotable — The Game',
@@ -15,7 +16,7 @@ export const viewport: Viewport = {
   initialScale: 1,
 };
 
-const VERSION = '0.2.6';
+const VERSION = '0.2.7';
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
@@ -23,13 +24,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body className="root-body">
         <TopBanner />
         <div className="root-content">{children}</div>
-        <div className="banner-bottom-wrap">
-          <img src="/UQTG003.png" alt="" />
+        <WaveBanner variant="slim" flip>
           <div className="banner-bottom-info">
             <span>Copyright Astra Computing 2026</span>
             <VersionButton version={VERSION} />
           </div>
-        </div>
+        </WaveBanner>
       </body>
     </html>
   );

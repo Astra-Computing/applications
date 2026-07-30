@@ -1,5 +1,6 @@
 'use client';
 import { useState, useEffect } from 'react';
+import WaveBanner from './WaveBanner';
 
 const TYPED_TEXT = ' Quotable — The Game';
 
@@ -23,8 +24,7 @@ export default function HomeBanner() {
   const isDone = typed.length === TYPED_TEXT.length;
 
   return (
-    <div className="banner-home-wrap">
-      <img src="/UQTG001.png" alt="" />
+    <WaveBanner variant="hero">
       <div className="banner-title-overlay">
         <div className="banner-title-row">
           <img src="/UQTG004.png" alt="[UN]" className="banner-title-img" />
@@ -34,6 +34,6 @@ export default function HomeBanner() {
           </span>
         </div>
       </div>
-    </div>
+    </WaveBanner>
   );
 }
