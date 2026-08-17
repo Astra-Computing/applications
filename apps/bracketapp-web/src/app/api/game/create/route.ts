@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createGame } from '@/lib/gameLogic';
 import { saveState } from '@/lib/gameState';
+import { checkRateLimit } from '@/lib/rateLimit';
 import { Quote } from '@/lib/types';
 
 export const runtime = 'nodejs';
@@ -11,6 +12,14 @@ const MAX_AUTHOR_LEN = 200;
 
 export async function POST(req: NextRequest) {
   try {
+    const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
+             ?? req.headers.get('x-real-ip')
+             ?? 'unknown';
+    const allowed = await checkRateLimit(ip);
+    if (!allowed) {
+      return NextResponse.json({ error: 'Too many games created. Try again later.' }, { status: 429 });
+    }
+
     const { quotes } = await req.json() as { quotes: Quote[] };
     if (!Array.isArray(quotes) || quotes.length < 2) {
       return NextResponse.json({ error: 'Need at least 2 quotes' }, { status: 400 });

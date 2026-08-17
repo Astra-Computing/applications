@@ -1,5 +1,6 @@
-import { randomUUID, createCipheriv, createDecipheriv, randomBytes } from 'crypto';
-import { redis } from './redis';
+import { createCipheriv, createDecipheriv, randomBytes } from 'crypto';
+import type { TransactionSql } from 'postgres';
+import { sql } from './db';
 import { GameState } from './types';
 
 // ── Encryption (AES-256-GCM) ────────────────────────────────────────────────
@@ -44,91 +45,60 @@ function decryptState(envelope: EncryptedEnvelope): string {
   ]).toString('utf-8');
 }
 
-// ── Distributed lock (SET NX PX + Lua compare-and-delete release) ──────────
+// ── Row lock ─────────────────────────────────────────────────────────────
+//
+// `SELECT ... FOR UPDATE` inside a transaction blocks concurrent transactions
+// touching the same room row until this one commits — Postgres does the
+// serialization natively, no manual lock-token/retry loop needed. This works
+// correctly through Supabase's transaction-mode pooler because the whole
+// BEGIN..COMMIT block runs on one backend connection for its duration.
 
-const LOCK_TTL_MS      = 5_000; // safety-net auto-expiry if a holder dies mid-critical-section
-const LOCK_MAX_WAIT_MS = 4_000;
+interface GameRow { room_code: string; envelope: EncryptedEnvelope }
 
-const RELEASE_LOCK_SCRIPT = `
-  if redis.call("get", KEYS[1]) == ARGV[1] then
-    return redis.call("del", KEYS[1])
-  else
-    return 0
-  end
-`;
-
-function lockKey(roomCode: string) { return `lock:${roomCode}`; }
-function sleep(ms: number) { return new Promise(r => setTimeout(r, ms)); }
-
-async function acquireLock(roomCode: string): Promise<string> {
-  const token    = randomUUID();
-  const key      = lockKey(roomCode);
-  const deadline = Date.now() + LOCK_MAX_WAIT_MS;
-  let attempt = 0;
-
-  while (Date.now() < deadline) {
-    const ok = await redis.set(key, token, { nx: true, px: LOCK_TTL_MS });
-    if (ok === 'OK') return token;
-    const backoff = Math.min(200, 20 * 2 ** attempt) + Math.random() * 30;
-    await sleep(backoff);
-    attempt++;
-  }
-  throw new Error(`Could not acquire lock for room ${roomCode} within ${LOCK_MAX_WAIT_MS}ms`);
-}
-
-async function releaseLock(roomCode: string, token: string): Promise<void> {
-  try {
-    await redis.eval(RELEASE_LOCK_SCRIPT, [lockKey(roomCode)], [token]);
-  } catch (e) {
-    // Non-fatal — the PX TTL will expire the lock on its own.
-    console.error(`Failed to release lock for ${roomCode}`, e);
-  }
-}
-
-export async function withRoomLock<T>(roomCode: string, fn: () => Promise<T>): Promise<T> {
-  const token = await acquireLock(roomCode);
-  try {
-    return await fn();
-  } finally {
-    await releaseLock(roomCode, token);
-  }
+async function withRoomLock<T>(
+  roomCode: string,
+  fn: (tx: TransactionSql, row: GameRow | null) => Promise<T>,
+): Promise<T> {
+  return sql.begin(async (tx) => {
+    const rows = await tx<GameRow[]>`
+      SELECT room_code, envelope FROM game_states WHERE room_code = ${roomCode} FOR UPDATE
+    `;
+    return fn(tx, rows[0] ?? null);
+  }) as Promise<T>;
 }
 
 // ── CRUD ────────────────────────────────────────────────────────────────────
-
-const STATE_TTL_SECONDS = 24 * 60 * 60;
-
-function stateKey(roomCode: string) { return `game:${roomCode}`; }
 
 export function isValidCode(code: string): boolean {
   return /^[A-Z]{4}$/.test(code);
 }
 
-async function readState(roomCode: string): Promise<GameState | null> {
-  const envelope = await redis.get<EncryptedEnvelope>(stateKey(roomCode));
-  if (!envelope) return null;
-  try {
-    return JSON.parse(decryptState(envelope)) as GameState;
-  } catch {
-    return null;
-  }
-}
-
-async function writeState(state: GameState): Promise<void> {
-  const envelope = encryptState(JSON.stringify(state));
-  await redis.set(stateKey(state.roomCode), envelope, { ex: STATE_TTL_SECONDS });
-}
-
 export async function loadState(roomCode: string): Promise<GameState | null> {
-  return withRoomLock(roomCode, () => readState(roomCode));
+  return withRoomLock(roomCode, async (_tx, row) => {
+    if (!row) return null;
+    try {
+      return JSON.parse(decryptState(row.envelope)) as GameState;
+    } catch {
+      return null;
+    }
+  });
 }
 
 export async function saveState(state: GameState): Promise<void> {
-  return withRoomLock(state.roomCode, () => writeState(state));
+  await withRoomLock(state.roomCode, async (tx) => {
+    const envelope = encryptState(JSON.stringify(state));
+    await tx`
+      INSERT INTO game_states (room_code, envelope, updated_at)
+      VALUES (${state.roomCode}, ${sql.json(envelope as any)}, now())
+      ON CONFLICT (room_code) DO UPDATE SET envelope = excluded.envelope, updated_at = now()
+    `;
+  });
 }
 
 export async function deleteState(roomCode: string): Promise<void> {
-  return withRoomLock(roomCode, async () => { await redis.del(stateKey(roomCode)); });
+  await withRoomLock(roomCode, async (tx) => {
+    await tx`DELETE FROM game_states WHERE room_code = ${roomCode}`;
+  });
 }
 
 // Verify host token and delete atomically under the room lock.
@@ -136,11 +106,16 @@ export async function verifyAndDelete(
   roomCode: string,
   hostToken: string,
 ): Promise<{ found: boolean; authorized: boolean }> {
-  return withRoomLock(roomCode, async () => {
-    const state = await readState(roomCode);
-    if (!state) return { found: false, authorized: false };
+  return withRoomLock(roomCode, async (tx, row) => {
+    if (!row) return { found: false, authorized: false };
+    let state: GameState;
+    try {
+      state = JSON.parse(decryptState(row.envelope)) as GameState;
+    } catch {
+      return { found: false, authorized: false };
+    }
     if (state.hostToken !== hostToken) return { found: true, authorized: false };
-    await redis.del(stateKey(roomCode));
+    await tx`DELETE FROM game_states WHERE room_code = ${roomCode}`;
     return { found: true, authorized: true };
   });
 }
@@ -149,11 +124,17 @@ export async function loadAndUpdate(
   roomCode: string,
   updater: (state: GameState) => GameState,
 ): Promise<GameState | null> {
-  return withRoomLock(roomCode, async () => {
-    const state = await readState(roomCode);
-    if (!state) return null;
+  return withRoomLock(roomCode, async (tx, row) => {
+    if (!row) return null;
+    let state: GameState;
+    try {
+      state = JSON.parse(decryptState(row.envelope)) as GameState;
+    } catch {
+      return null;
+    }
     const next = updater(state);
-    await writeState(next);
+    const envelope = encryptState(JSON.stringify(next));
+    await tx`UPDATE game_states SET envelope = ${sql.json(envelope as any)}, updated_at = now() WHERE room_code = ${roomCode}`;
     return next;
   });
 }
