@@ -24,7 +24,8 @@ export default function HostPage() {
   const [skipTutorial, setSkipTutorial] = useState(false);
   const [showTutorial, setShowTutorial] = useState(false);
   const [showEndConfirm, setShowEndConfirm] = useState(false);
-  const esRef = useRef<EventSource | null>(null);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const failCountRef = useRef(0);
 
   useEffect(() => {
     setJoinUrl(`${window.location.origin}/join?code=${code}`);
@@ -34,22 +35,43 @@ export default function HostPage() {
   useEffect(() => {
     if (!hostToken) return;
 
-    const es = new EventSource(`/api/game/${code}/stream?hostToken=${encodeURIComponent(hostToken)}`);
-    es.onmessage = (e) => {
-      try { setState(JSON.parse(e.data)); } catch {}
-    };
-    es.onerror = () => {
-      if (es.readyState === EventSource.CLOSED) setError('Connection lost.');
-    };
-    esRef.current = es;
+    let cancelled = false;
+    let inFlight  = false;
 
-    return () => { es.close(); };
+    async function poll() {
+      if (inFlight) return;
+      inFlight = true;
+      try {
+        const res = await fetch(`/api/game/${code}`, { headers: { 'x-host-token': hostToken } });
+        if (cancelled) return;
+        if (res.ok) {
+          failCountRef.current = 0;
+          setState(await res.json());
+        } else if (res.status === 404) {
+          setError('Room not found.');
+        } else if (++failCountRef.current >= 3) {
+          setError('Connection lost.');
+        }
+      } catch {
+        if (!cancelled && ++failCountRef.current >= 3) setError('Connection lost.');
+      } finally {
+        inFlight = false;
+      }
+    }
+
+    poll();
+    pollRef.current = setInterval(poll, 2000);
+
+    return () => {
+      cancelled = true;
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
   }, [code, hostToken]);
 
   useEffect(() => {
-    if (state?.status === 'done') {
-      esRef.current?.close();
-      esRef.current = null;
+    if (state?.status === 'done' && pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
     }
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }, [state?.status]);

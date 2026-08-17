@@ -8,9 +8,6 @@ out/
 # production build
 build/
 
-# game state files (runtime data, not source)
-game_states/
-
 # environment variables
 .env
 .env.local

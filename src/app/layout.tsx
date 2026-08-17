@@ -16,7 +16,7 @@ export const viewport: Viewport = {
   initialScale: 1,
 };
 
-const VERSION = '0.2.7';
+const VERSION = '0.3.0';
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (

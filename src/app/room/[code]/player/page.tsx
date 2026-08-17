@@ -91,8 +91,9 @@ function PlayerView() {
   const [state, setState]             = useState<GameStatePublic | null>(null);
   const [error, setError]             = useState('');
   const [voting, setVoting]           = useState<Record<number, boolean>>({});
-  const esRef        = useRef<EventSource | null>(null);
-  const heartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollRef       = useRef<ReturnType<typeof setInterval> | null>(null);
+  const failCountRef  = useRef(0);
+  const heartbeatRef  = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Read session from sessionStorage (client-only)
   useEffect(() => {
@@ -106,16 +107,34 @@ function PlayerView() {
   useEffect(() => {
     if (!name || !playerToken) return;
 
-    const es = new EventSource(
-      `/api/game/${code}/stream?playerToken=${encodeURIComponent(playerToken)}&playerName=${encodeURIComponent(name)}`
-    );
-    es.onmessage = (e) => {
-      try { setState(JSON.parse(e.data)); } catch {}
-    };
-    es.onerror = () => {
-      if (es.readyState === EventSource.CLOSED) setError('Connection lost.');
-    };
-    esRef.current = es;
+    let cancelled = false;
+    let inFlight  = false;
+
+    async function poll() {
+      if (inFlight) return;
+      inFlight = true;
+      try {
+        const res = await fetch(`/api/game/${code}`, {
+          headers: { 'x-player-token': playerToken, 'x-player-name': name },
+        });
+        if (cancelled) return;
+        if (res.ok) {
+          failCountRef.current = 0;
+          setState(await res.json());
+        } else if (res.status === 404) {
+          setError('Room not found.');
+        } else if (++failCountRef.current >= 3) {
+          setError('Connection lost.');
+        }
+      } catch {
+        if (!cancelled && ++failCountRef.current >= 3) setError('Connection lost.');
+      } finally {
+        inFlight = false;
+      }
+    }
+
+    poll();
+    pollRef.current = setInterval(poll, 2000);
 
     heartbeatRef.current = setInterval(() => {
       fetch(`/api/game/${code}/heartbeat`, {
@@ -125,15 +144,15 @@ function PlayerView() {
     }, HEARTBEAT_MS);
 
     return () => {
-      es.close();
+      cancelled = true;
+      if (pollRef.current) clearInterval(pollRef.current);
       if (heartbeatRef.current) clearInterval(heartbeatRef.current);
     };
   }, [code, name, playerToken]);
 
   useEffect(() => {
     if (state?.status === 'done') {
-      esRef.current?.close();
-      esRef.current = null;
+      if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
       if (heartbeatRef.current) { clearInterval(heartbeatRef.current); heartbeatRef.current = null; }
     }
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -150,6 +169,19 @@ function PlayerView() {
           'x-player-name': name,
         },
         body: JSON.stringify({ matchupIndex, choice }),
+      });
+      // Optimistic local update so the next matchup appears immediately,
+      // instead of waiting on the next SSE push.
+      setState(prev => {
+        if (!prev) return prev;
+        const matchups = prev.matchups.map((m, i) => {
+          if (i !== matchupIndex) return m;
+          const votes = { ...m.votes };
+          if (m.myVote) votes[m.myVote] = Math.max(0, votes[m.myVote] - 1);
+          votes[choice] += 1;
+          return { ...m, myVote: choice, votes };
+        });
+        return { ...prev, matchups };
       });
     } finally {
       setVoting(v => ({ ...v, [matchupIndex]: false }));
@@ -183,13 +215,16 @@ function PlayerView() {
         </div>
       )}
 
-      {/* Voting */}
+      {/* Voting — one matchup at a time, no going back to a previous one */}
       {state.status === 'voting' && (() => {
-        const realMatchups = state.matchups.filter((m: MatchupPublic) => m.a && m.b);
-        const voteCount = realMatchups.filter((m: MatchupPublic) => m.myVote !== null).length;
+        const indexed = state.matchups
+          .map((m: MatchupPublic, i: number) => ({ m, i }))
+          .filter(({ m }: { m: MatchupPublic }) => m.a && m.b);
+        const voteCount = indexed.filter(({ m }: { m: MatchupPublic }) => m.myVote !== null).length;
         const now = Date.now();
         const activeCount = Object.values(state.participants).filter((ts: number) => now - ts < PLAYER_TIMEOUT_MS).length;
-        const allCast = activeCount > 0 && realMatchups.every((m: MatchupPublic) => m.votes.a + m.votes.b >= activeCount);
+        const allCast = activeCount > 0 && indexed.every(({ m }: { m: MatchupPublic }) => m.votes.a + m.votes.b >= activeCount);
+        const current = indexed.find(({ m }: { m: MatchupPublic }) => m.myVote === null);
 
         return (
           <>
@@ -197,46 +232,40 @@ function PlayerView() {
               <h3 style={{ fontFamily: 'var(--font-sans)', fontWeight: 600, fontSize: '1.05rem' }}>
                 Round {state.round} — Vote!
               </h3>
-              <span className="text-sm text-muted">{voteCount}/{realMatchups.length} cast</span>
+              <span className="text-sm text-muted">{voteCount}/{indexed.length} cast</span>
             </div>
             <p className="text-xs text-muted mb-2">Quotes are anonymous. Vote for whichever speaks to you.</p>
 
-            {state.matchups.map((m: MatchupPublic, i: number) => {
-              if (!m.a || !m.b) return null;
-              const pick = m.myVote;
-              return (
-                <div key={i} style={{ marginBottom: '2rem' }}>
-                  <p className="match-header">Match {i + 1}</p>
-                  <div className="grid-3">
-                    <div className="flex-col" style={{ gap: '0.5rem' }}>
-                      <QuoteCard quote={m.a} selected={pick === 'a'} />
-                      <button
-                        className={`btn${pick === 'a' ? ' btn-primary' : ''} btn-full${voting[i] ? ' waiting-shimmer' : ''}`}
-                        onClick={() => vote(i, 'a')}
-                        disabled={voting[i]}
-                      >
-                        {pick === 'a' ? '✓ Your pick' : 'Vote for this'}
-                      </button>
-                    </div>
+            {current ? (
+              <div key={current.i} className="matchup-enter">
+                <p className="match-header">Matchup {voteCount + 1} of {indexed.length}</p>
+                <div className="grid-3">
+                  <div className="flex-col" style={{ gap: '0.5rem' }}>
+                    <QuoteCard quote={current.m.a!} />
+                    <button
+                      className={`btn btn-full${voting[current.i] ? ' waiting-shimmer' : ''}`}
+                      onClick={() => vote(current.i, 'a')}
+                      disabled={voting[current.i]}
+                    >
+                      Vote for this
+                    </button>
+                  </div>
 
-                    <div className="vs-label">vs</div>
+                  <div className="vs-label">vs</div>
 
-                    <div className="flex-col" style={{ gap: '0.5rem' }}>
-                      <QuoteCard quote={m.b} selected={pick === 'b'} />
-                      <button
-                        className={`btn${pick === 'b' ? ' btn-primary' : ''} btn-full${voting[i] ? ' waiting-shimmer' : ''}`}
-                        onClick={() => vote(i, 'b')}
-                        disabled={voting[i]}
-                      >
-                        {pick === 'b' ? '✓ Your pick' : 'Vote for this'}
-                      </button>
-                    </div>
+                  <div className="flex-col" style={{ gap: '0.5rem' }}>
+                    <QuoteCard quote={current.m.b!} />
+                    <button
+                      className={`btn btn-full${voting[current.i] ? ' waiting-shimmer' : ''}`}
+                      onClick={() => vote(current.i, 'b')}
+                      disabled={voting[current.i]}
+                    >
+                      Vote for this
+                    </button>
                   </div>
                 </div>
-              );
-            })}
-
-            {voteCount === realMatchups.length && (
+              </div>
+            ) : (
               <div className="alert alert-success">
                 <span className="waiting-shimmer">
                   {allCast ? 'All votes cast! Waiting for host.' : 'You voted! Waiting for a few more votes.'}

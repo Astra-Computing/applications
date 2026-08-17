@@ -18,7 +18,7 @@ export async function POST(req: NextRequest, { params }: { params: { code: strin
   const state = await loadAndUpdate(code, s => {
     if (s.playerTokens[playerName] !== playerToken) { authError = true; return s; }
     return refreshHeartbeat(s, playerName);
-  }, { notify: false });
+  });
   if (!state) return NextResponse.json({ error: 'Room not found' }, { status: 404 });
   if (authError) return NextResponse.json({ error: 'Unauthorised' }, { status: 401 });
   return NextResponse.json({ ok: true });

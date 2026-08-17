@@ -1,15 +1,6 @@
-import fs from 'fs';
-import path from 'path';
-import { EventEmitter } from 'events';
-import { createCipheriv, createDecipheriv, randomBytes } from 'crypto';
+import { randomUUID, createCipheriv, createDecipheriv, randomBytes } from 'crypto';
+import { redis } from './redis';
 import { GameState } from './types';
-
-export const roomEvents = new EventEmitter();
-roomEvents.setMaxListeners(500);
-
-const STATE_DIR = process.env.STATE_DIR ?? path.join(process.cwd(), 'game_states');
-
-try { fs.mkdirSync(STATE_DIR, { recursive: true }); } catch {}
 
 // ── Encryption (AES-256-GCM) ────────────────────────────────────────────────
 //
@@ -21,6 +12,8 @@ try { fs.mkdirSync(STATE_DIR, { recursive: true }); } catch {}
 const ALGORITHM = 'aes-256-gcm';
 const DEV_KEY   = Buffer.from('uq_game_dev_only_key_placeholder', 'utf-8'); // exactly 32 bytes
 
+interface EncryptedEnvelope { iv: string; tag: string; enc: string }
+
 function getEncryptionKey(): Buffer {
   const envKey = process.env.GAME_ENCRYPTION_KEY;
   if (!envKey) return DEV_KEY;
@@ -29,99 +22,113 @@ function getEncryptionKey(): Buffer {
   return buf;
 }
 
-function encryptState(plaintext: string): string {
+function encryptState(plaintext: string): EncryptedEnvelope {
   const key = getEncryptionKey();
   const iv  = randomBytes(12);
   const cipher = createCipheriv(ALGORITHM, key, iv);
   const encrypted = Buffer.concat([cipher.update(plaintext, 'utf-8'), cipher.final()]);
-  return JSON.stringify({
+  return {
     iv:  iv.toString('base64'),
     tag: cipher.getAuthTag().toString('base64'),
     enc: encrypted.toString('base64'),
-  });
+  };
 }
 
-function decryptState(raw: string): string {
-  const { iv, tag, enc } = JSON.parse(raw) as { iv: string; tag: string; enc: string };
-  const key     = getEncryptionKey();
-  const decipher = createDecipheriv(ALGORITHM, key, Buffer.from(iv, 'base64'));
-  decipher.setAuthTag(Buffer.from(tag, 'base64'));
+function decryptState(envelope: EncryptedEnvelope): string {
+  const key = getEncryptionKey();
+  const decipher = createDecipheriv(ALGORITHM, key, Buffer.from(envelope.iv, 'base64'));
+  decipher.setAuthTag(Buffer.from(envelope.tag, 'base64'));
   return Buffer.concat([
-    decipher.update(Buffer.from(enc, 'base64')),
+    decipher.update(Buffer.from(envelope.enc, 'base64')),
     decipher.final(),
   ]).toString('utf-8');
 }
 
-// Try encrypted first; fall back to plaintext for pre-encryption files.
-function readStateFile(p: string): GameState {
-  const raw = fs.readFileSync(p, 'utf-8');
+// ── Distributed lock (SET NX PX + Lua compare-and-delete release) ──────────
+
+const LOCK_TTL_MS      = 5_000; // safety-net auto-expiry if a holder dies mid-critical-section
+const LOCK_MAX_WAIT_MS = 4_000;
+
+const RELEASE_LOCK_SCRIPT = `
+  if redis.call("get", KEYS[1]) == ARGV[1] then
+    return redis.call("del", KEYS[1])
+  else
+    return 0
+  end
+`;
+
+function lockKey(roomCode: string) { return `lock:${roomCode}`; }
+function sleep(ms: number) { return new Promise(r => setTimeout(r, ms)); }
+
+async function acquireLock(roomCode: string): Promise<string> {
+  const token    = randomUUID();
+  const key      = lockKey(roomCode);
+  const deadline = Date.now() + LOCK_MAX_WAIT_MS;
+  let attempt = 0;
+
+  while (Date.now() < deadline) {
+    const ok = await redis.set(key, token, { nx: true, px: LOCK_TTL_MS });
+    if (ok === 'OK') return token;
+    const backoff = Math.min(200, 20 * 2 ** attempt) + Math.random() * 30;
+    await sleep(backoff);
+    attempt++;
+  }
+  throw new Error(`Could not acquire lock for room ${roomCode} within ${LOCK_MAX_WAIT_MS}ms`);
+}
+
+async function releaseLock(roomCode: string, token: string): Promise<void> {
   try {
-    return JSON.parse(decryptState(raw)) as GameState;
-  } catch {
-    return JSON.parse(raw) as GameState;
+    await redis.eval(RELEASE_LOCK_SCRIPT, [lockKey(roomCode)], [token]);
+  } catch (e) {
+    // Non-fatal — the PX TTL will expire the lock on its own.
+    console.error(`Failed to release lock for ${roomCode}`, e);
   }
 }
 
-// ── Mutex ───────────────────────────────────────────────────────────────────
-
-const pending = new Map<string, Promise<unknown>>();
-
 export async function withRoomLock<T>(roomCode: string, fn: () => Promise<T>): Promise<T> {
-  const prev = pending.get(roomCode) ?? Promise.resolve();
-  let release!: () => void;
-  const lock = new Promise<void>(r => (release = r));
-  const chain = prev.then(() => lock);
-  pending.set(roomCode, chain);
-  await prev;
+  const token = await acquireLock(roomCode);
   try {
     return await fn();
   } finally {
-    release();
-    if (pending.get(roomCode) === chain) pending.delete(roomCode);
+    await releaseLock(roomCode, token);
   }
 }
 
 // ── CRUD ────────────────────────────────────────────────────────────────────
 
-function statePath(roomCode: string) { return path.join(STATE_DIR, `${roomCode}.json`); }
+const STATE_TTL_SECONDS = 24 * 60 * 60;
 
-export async function loadState(roomCode: string): Promise<GameState | null> {
-  return withRoomLock(roomCode, async () => {
-    const p = statePath(roomCode);
-    if (!fs.existsSync(p)) return null;
-    try {
-      return readStateFile(p);
-    } catch {
-      const backup = p + '.backup';
-      if (fs.existsSync(backup)) {
-        try { return readStateFile(backup); } catch {}
-      }
-      return null;
-    }
-  });
-}
-
-export async function saveState(state: GameState): Promise<void> {
-  return withRoomLock(state.roomCode, async () => {
-    const p   = statePath(state.roomCode);
-    const tmp = p + '.tmp';
-    fs.writeFileSync(tmp, encryptState(JSON.stringify(state)), 'utf-8');
-    if (fs.existsSync(p)) fs.copyFileSync(p, p + '.backup');
-    fs.renameSync(tmp, p);
-  });
-}
+function stateKey(roomCode: string) { return `game:${roomCode}`; }
 
 export function isValidCode(code: string): boolean {
   return /^[A-Z]{4}$/.test(code);
 }
 
+async function readState(roomCode: string): Promise<GameState | null> {
+  const envelope = await redis.get<EncryptedEnvelope>(stateKey(roomCode));
+  if (!envelope) return null;
+  try {
+    return JSON.parse(decryptState(envelope)) as GameState;
+  } catch {
+    return null;
+  }
+}
+
+async function writeState(state: GameState): Promise<void> {
+  const envelope = encryptState(JSON.stringify(state));
+  await redis.set(stateKey(state.roomCode), envelope, { ex: STATE_TTL_SECONDS });
+}
+
+export async function loadState(roomCode: string): Promise<GameState | null> {
+  return withRoomLock(roomCode, () => readState(roomCode));
+}
+
+export async function saveState(state: GameState): Promise<void> {
+  return withRoomLock(state.roomCode, () => writeState(state));
+}
+
 export async function deleteState(roomCode: string): Promise<void> {
-  return withRoomLock(roomCode, async () => {
-    const p = statePath(roomCode);
-    for (const file of [p, p + '.backup', p + '.tmp']) {
-      try { fs.unlinkSync(file); } catch {}
-    }
-  });
+  return withRoomLock(roomCode, async () => { await redis.del(stateKey(roomCode)); });
 }
 
 // Verify host token and delete atomically under the room lock.
@@ -130,14 +137,10 @@ export async function verifyAndDelete(
   hostToken: string,
 ): Promise<{ found: boolean; authorized: boolean }> {
   return withRoomLock(roomCode, async () => {
-    const p = statePath(roomCode);
-    if (!fs.existsSync(p)) return { found: false, authorized: false };
-    let state: GameState;
-    try { state = readStateFile(p); } catch { return { found: false, authorized: false }; }
+    const state = await readState(roomCode);
+    if (!state) return { found: false, authorized: false };
     if (state.hostToken !== hostToken) return { found: true, authorized: false };
-    for (const file of [p, p + '.backup', p + '.tmp']) {
-      try { fs.unlinkSync(file); } catch {}
-    }
+    await redis.del(stateKey(roomCode));
     return { found: true, authorized: true };
   });
 }
@@ -145,52 +148,12 @@ export async function verifyAndDelete(
 export async function loadAndUpdate(
   roomCode: string,
   updater: (state: GameState) => GameState,
-  options?: { notify?: boolean },
 ): Promise<GameState | null> {
-  const result = await withRoomLock(roomCode, async () => {
-    const p = statePath(roomCode);
-    if (!fs.existsSync(p)) return null;
-    let state: GameState;
-    try {
-      state = readStateFile(p);
-    } catch {
-      return null;
-    }
+  return withRoomLock(roomCode, async () => {
+    const state = await readState(roomCode);
+    if (!state) return null;
     const next = updater(state);
-    const tmp  = p + '.tmp';
-    fs.writeFileSync(tmp, encryptState(JSON.stringify(next)), 'utf-8');
-    if (fs.existsSync(p)) fs.copyFileSync(p, p + '.backup');
-    fs.renameSync(tmp, p);
+    await writeState(next);
     return next;
   });
-
-  if (result && options?.notify !== false) {
-    roomEvents.emit(`update:${roomCode}`, result);
-  }
-
-  return result;
 }
-
-// ── TTL cleanup ─────────────────────────────────────────────────────────────
-
-function cleanupOldGames() {
-  try {
-    const cutoff = Date.now() - 24 * 60 * 60 * 1000;
-    const files = fs.readdirSync(STATE_DIR)
-      .filter(f => f.endsWith('.json') && !f.includes('.backup') && !f.includes('.tmp'));
-    for (const file of files) {
-      try {
-        const p     = path.join(STATE_DIR, file);
-        const state = readStateFile(p);
-        if (state.createdAt < cutoff) {
-          for (const f of [p, p + '.backup', p + '.tmp']) {
-            try { fs.unlinkSync(f); } catch {}
-          }
-        }
-      } catch {}
-    }
-  } catch {}
-}
-
-cleanupOldGames();
-setInterval(cleanupOldGames, 60 * 60 * 1000);

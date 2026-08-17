@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { createPortal } from 'react-dom';
 
 const HISTORY = [
+  { v: '0.3.0', note: 'Voting now shows one matchup at a time; smaller coffee card' },
   { v: '0.2.7', note: 'Animated wave banners; fixed home title on mobile' },
   { v: '0.2.6', note: 'Fixed bracket BYE alignment for chained byes' },
   { v: '0.2.5', note: 'Improved reliability for gained/lost players' },

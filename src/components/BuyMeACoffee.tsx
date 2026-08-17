@@ -2,7 +2,7 @@ export default function BuyMeACoffee() {
   return (
     <div className="card bmc-card">
       <div className="bmc-top">
-        <svg width="56" height="52" viewBox="0 0 56 52" fill="none" aria-hidden="true">
+        <svg width="37" height="35" viewBox="0 0 56 52" fill="none" aria-hidden="true">
           <path d="M14 14 Q12 10 14 6" stroke="var(--accent)" strokeWidth="1.8" strokeLinecap="round"/>
           <path d="M23 14 Q21 10 23 6" stroke="var(--accent)" strokeWidth="1.8" strokeLinecap="round"/>
           <path d="M32 14 Q30 10 32 6" stroke="var(--accent)" strokeWidth="1.8" strokeLinecap="round"/>

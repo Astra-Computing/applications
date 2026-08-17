@@ -1,28 +1,28 @@
 // Rate limiting for POST /api/game/create.
-// Uses a module-level in-process Map — works correctly only in single-process
-// (containerised) deployments. In serverless, each cold start gets a fresh Map.
+// Backed by Upstash Redis (via @upstash/ratelimit) so limits are enforced
+// consistently across serverless function instances, not just per-process.
 import { NextRequest, NextResponse } from 'next/server';
+import { Ratelimit } from '@upstash/ratelimit';
+import { redis } from '@/lib/redis';
 
-const ipMap = new Map<string, { count: number; resetAt: number }>();
-const LIMIT     = 10;
-const WINDOW_MS = 60 * 60 * 1000; // 1 hour
+const ratelimit = new Ratelimit({
+  redis,
+  limiter: Ratelimit.slidingWindow(10, '1 h'),
+  prefix: 'ratelimit:create',
+  analytics: false,
+});
 
-export function middleware(req: NextRequest) {
+export async function middleware(req: NextRequest) {
   const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
            ?? req.headers.get('x-real-ip')
            ?? 'unknown';
-  const now = Date.now();
-  const entry = ipMap.get(ip);
 
-  if (!entry || entry.resetAt < now) {
-    ipMap.set(ip, { count: 1, resetAt: now + WINDOW_MS });
-  } else if (entry.count >= LIMIT) {
+  const { success } = await ratelimit.limit(ip);
+  if (!success) {
     return NextResponse.json(
       { error: 'Too many games created. Try again later.' },
       { status: 429 },
     );
-  } else {
-    entry.count++;
   }
 }
 
