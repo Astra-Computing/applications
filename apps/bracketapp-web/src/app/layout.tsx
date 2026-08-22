@@ -3,6 +3,7 @@ import './globals.css';
 import TopBanner from '@/components/TopBanner';
 import VersionButton from '@/components/VersionButton';
 import WaveBanner from '@/components/WaveBanner';
+import { Analytics } from '@vercel/analytics/next';
 
 export const metadata: Metadata = {
   title: '[UN]Quotable — The Game',
@@ -30,6 +31,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <VersionButton version={VERSION} />
           </div>
         </WaveBanner>
+        <Analytics />
       </body>
     </html>
   );
