@@ -1,0 +1,9 @@
+# Vercel CLI link metadata (project/org IDs) - machine-local
+.vercel/
+
+# Local env files
+.env
+.env*.local
+
+.vercel
+.env*

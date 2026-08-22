@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { sql } from '@/lib/db';
+import { getSql } from '@/lib/db';
 
 export const runtime = 'nodejs';
 // Without this the handler has no dynamic inputs and Next prerenders it at
@@ -9,7 +9,7 @@ export const dynamic = 'force-dynamic';
 
 export async function GET() {
   try {
-    await sql`SELECT 1`;
+    await getSql()`SELECT 1`;
     return NextResponse.json({ status: 'ok', db: 'up' });
   } catch {
     return NextResponse.json({ status: 'degraded', db: 'down' }, { status: 503 });

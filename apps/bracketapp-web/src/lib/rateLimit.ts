@@ -1,4 +1,4 @@
-import { sql } from './db';
+import { getSql } from './db';
 
 // Rate limiting for POST /api/game/create, backed by Postgres instead of an
 // in-process Map — this needs to live in the route handler (Node.js runtime),
@@ -11,7 +11,7 @@ const WINDOW_MS = 60 * 60 * 1000; // 1 hour
 interface RateLimitRow { ip: string; count: number; reset_at: Date }
 
 export async function checkRateLimit(ip: string): Promise<boolean> {
-  return sql.begin(async (tx) => {
+  return getSql().begin(async (tx) => {
     const rows  = await tx<RateLimitRow[]>`SELECT ip, count, reset_at FROM rate_limits WHERE ip = ${ip} FOR UPDATE`;
     const now   = new Date();
     const entry = rows[0];

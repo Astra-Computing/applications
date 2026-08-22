@@ -1,6 +1,6 @@
 import { createCipheriv, createDecipheriv, randomBytes } from 'crypto';
 import type { TransactionSql } from 'postgres';
-import { sql } from './db';
+import { getSql } from './db';
 import { GameState } from './types';
 
 // ── Encryption (AES-256-GCM) ────────────────────────────────────────────────
@@ -66,7 +66,7 @@ async function withRoomLock<T>(
   roomCode: string,
   fn: (tx: TransactionSql, row: GameRow | null) => Promise<T>,
 ): Promise<T> {
-  return sql.begin(async (tx) => {
+  return getSql().begin(async (tx) => {
     const rows = await tx<GameRow[]>`
       SELECT room_code, envelope FROM game_states WHERE room_code = ${roomCode} FOR UPDATE
     `;
@@ -94,6 +94,7 @@ function parseEnvelope(envelope: EncryptedEnvelope): GameState | null {
 // A poll racing a concurrent write reads either the pre- or post-commit row;
 // both are valid snapshots, and the next poll is only 2s away.
 export async function loadState(roomCode: string): Promise<GameState | null> {
+  const sql = getSql();
   const rows = await sql<GameRow[]>`
     SELECT room_code, envelope FROM game_states WHERE room_code = ${roomCode}
   `;
@@ -105,6 +106,7 @@ export async function loadState(roomCode: string): Promise<GameState | null> {
 // caller can retry with a fresh code. ON CONFLICT DO UPDATE here would
 // silently overwrite - and so destroy - a live game on a code collision.
 export async function tryCreateState(state: GameState): Promise<boolean> {
+  const sql = getSql();
   const envelope = encryptState(JSON.stringify(state));
   const rows = await sql`
     INSERT INTO game_states (room_code, envelope, updated_at)
@@ -151,6 +153,7 @@ export async function loadAndUpdate(
     // updated_at - which would let rejected requests keep a dead room alive
     // past the 24h cleanup sweep indefinitely.
     if (next === state) return next;
+    const sql = getSql();
     const envelope = encryptState(JSON.stringify(next));
     await tx`UPDATE game_states SET envelope = ${sql.json(envelope as any)}, updated_at = now() WHERE room_code = ${roomCode}`;
     return next;
