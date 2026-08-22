@@ -16,7 +16,7 @@ export const viewport: Viewport = {
   initialScale: 1,
 };
 
-const VERSION = '0.3.0';
+const VERSION = '0.4.0';
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
@@ -26,7 +26,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <div className="root-content">{children}</div>
         <WaveBanner variant="slim" flip>
           <div className="banner-bottom-info">
-            <span>Copyright Astra Computing 2026</span>
+            <span>Copyright Jonathan Behrens 2026</span>
             <VersionButton version={VERSION} />
           </div>
         </WaveBanner>

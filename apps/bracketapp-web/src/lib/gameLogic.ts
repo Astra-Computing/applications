@@ -53,7 +53,11 @@ export function createGame(quotes: Quote[], hostToken: string): GameState {
   const roomCode = generateRoomCode();
   const pairs = buildBracket(quotes);
   const matchups: Matchup[] = pairs.map(([a, b]) => ({ a, b, votes: { a: [], b: [] }, winner: null }));
-  const totalRounds = Math.round(Math.log2(matchups.length * 2));
+  // ceil, not round: the bracket halves with Math.ceil each round, so a
+  // non-power-of-two field needs one more round than log2 rounded to nearest.
+  // With round(), 9-10 / 17-22 / 33-44 quotes under-reported by one and the
+  // header rendered e.g. "Round 4 of 3".
+  const totalRounds = Math.ceil(Math.log2(matchups.length * 2));
 
   return {
     roomCode,
@@ -99,7 +103,10 @@ export function castVote(state: GameState, matchupIndex: number, playerName: str
   return { ...state, matchups };
 }
 
-export const PLAYER_TIMEOUT_MS = 24_000;
+// Generous relative to the 8s heartbeat: mobile browsers suspend timers when
+// the screen locks or the tab is backgrounded, and at 24s a player glancing at
+// a notification dropped off the active roster and had their vote skipped.
+export const PLAYER_TIMEOUT_MS = 45_000;
 
 export function allVoted(state: GameState, now = Date.now()): boolean {
   const active = Object.entries(state.participants)

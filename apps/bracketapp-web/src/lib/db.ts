@@ -11,4 +11,12 @@ if (!connectionString) {
   throw new Error('Missing Postgres connection string: set SUPABASE_DB_URL (or DATABASE_URL).');
 }
 
-export const sql = postgres(connectionString, { prepare: false });
+// max: 1 — every Vercel lambda instance gets its own pool, so a per-instance
+// pool of 10 multiplies across concurrent invocations and exhausts Supavisor's
+// client limit under load. One connection per instance is the serverless norm.
+// idle_timeout releases it back to the pooler instead of holding it open.
+export const sql = postgres(connectionString, {
+  prepare: false,
+  max: 1,
+  idle_timeout: 20,
+});

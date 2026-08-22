@@ -8,7 +8,9 @@ import { GameState } from './types';
 // Set GAME_ENCRYPTION_KEY to a 64-char hex string (32 bytes) in .env.local.
 // Generate one with:  node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 //
-// If the env var is absent (local dev), a fixed dev key is used — not secure.
+// If the env var is absent, a fixed dev key is used - NOT secure, so this is
+// permitted only outside production. In production a missing key is fatal
+// rather than a silent downgrade to a key that is committed to this repo.
 
 const ALGORITHM = 'aes-256-gcm';
 const DEV_KEY   = Buffer.from('uq_game_dev_only_key_placeholder', 'utf-8'); // exactly 32 bytes
@@ -17,7 +19,12 @@ interface EncryptedEnvelope { iv: string; tag: string; enc: string }
 
 function getEncryptionKey(): Buffer {
   const envKey = process.env.GAME_ENCRYPTION_KEY;
-  if (!envKey) return DEV_KEY;
+  if (!envKey) {
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('GAME_ENCRYPTION_KEY must be set in production.');
+    }
+    return DEV_KEY;
+  }
   const buf = Buffer.from(envKey, 'hex');
   if (buf.length !== 32) throw new Error('GAME_ENCRYPTION_KEY must be exactly 64 hex characters (32 bytes)');
   return buf;
@@ -73,26 +80,39 @@ export function isValidCode(code: string): boolean {
   return /^[A-Z]{4}$/.test(code);
 }
 
-export async function loadState(roomCode: string): Promise<GameState | null> {
-  return withRoomLock(roomCode, async (_tx, row) => {
-    if (!row) return null;
-    try {
-      return JSON.parse(decryptState(row.envelope)) as GameState;
-    } catch {
-      return null;
-    }
-  });
+function parseEnvelope(envelope: EncryptedEnvelope): GameState | null {
+  try {
+    return JSON.parse(decryptState(envelope)) as GameState;
+  } catch {
+    return null;
+  }
 }
 
-export async function saveState(state: GameState): Promise<void> {
-  await withRoomLock(state.roomCode, async (tx) => {
-    const envelope = encryptState(JSON.stringify(state));
-    await tx`
-      INSERT INTO game_states (room_code, envelope, updated_at)
-      VALUES (${state.roomCode}, ${sql.json(envelope as any)}, now())
-      ON CONFLICT (room_code) DO UPDATE SET envelope = excluded.envelope, updated_at = now()
-    `;
-  });
+// Deliberately NOT under withRoomLock: this backs the 2s client poll, and
+// taking FOR UPDATE on a read would serialize every player's poll against
+// each other and against the votes/heartbeats that genuinely need the lock.
+// A poll racing a concurrent write reads either the pre- or post-commit row;
+// both are valid snapshots, and the next poll is only 2s away.
+export async function loadState(roomCode: string): Promise<GameState | null> {
+  const rows = await sql<GameRow[]>`
+    SELECT room_code, envelope FROM game_states WHERE room_code = ${roomCode}
+  `;
+  const row = rows[0];
+  return row ? parseEnvelope(row.envelope) : null;
+}
+
+// Insert-if-absent. Returns false when the room code is already taken so the
+// caller can retry with a fresh code. ON CONFLICT DO UPDATE here would
+// silently overwrite - and so destroy - a live game on a code collision.
+export async function tryCreateState(state: GameState): Promise<boolean> {
+  const envelope = encryptState(JSON.stringify(state));
+  const rows = await sql`
+    INSERT INTO game_states (room_code, envelope, updated_at)
+    VALUES (${state.roomCode}, ${sql.json(envelope as any)}, now())
+    ON CONFLICT (room_code) DO NOTHING
+    RETURNING room_code
+  `;
+  return rows.length > 0;
 }
 
 export async function deleteState(roomCode: string): Promise<void> {
@@ -108,12 +128,8 @@ export async function verifyAndDelete(
 ): Promise<{ found: boolean; authorized: boolean }> {
   return withRoomLock(roomCode, async (tx, row) => {
     if (!row) return { found: false, authorized: false };
-    let state: GameState;
-    try {
-      state = JSON.parse(decryptState(row.envelope)) as GameState;
-    } catch {
-      return { found: false, authorized: false };
-    }
+    const state = parseEnvelope(row.envelope);
+    if (!state) return { found: false, authorized: false };
     if (state.hostToken !== hostToken) return { found: true, authorized: false };
     await tx`DELETE FROM game_states WHERE room_code = ${roomCode}`;
     return { found: true, authorized: true };
@@ -126,13 +142,15 @@ export async function loadAndUpdate(
 ): Promise<GameState | null> {
   return withRoomLock(roomCode, async (tx, row) => {
     if (!row) return null;
-    let state: GameState;
-    try {
-      state = JSON.parse(decryptState(row.envelope)) as GameState;
-    } catch {
-      return null;
-    }
+    const state = parseEnvelope(row.envelope);
+    if (!state) return null;
     const next = updater(state);
+    // Updaters signal "no change" by returning the state object unchanged
+    // (rejected auth, wrong phase, unknown player). Skipping the write there
+    // avoids re-encrypting the row and, more importantly, avoids refreshing
+    // updated_at - which would let rejected requests keep a dead room alive
+    // past the 24h cleanup sweep indefinitely.
+    if (next === state) return next;
     const envelope = encryptState(JSON.stringify(next));
     await tx`UPDATE game_states SET envelope = ${sql.json(envelope as any)}, updated_at = now() WHERE room_code = ${roomCode}`;
     return next;

@@ -118,6 +118,7 @@ label { font-size: 0.88rem; color: var(--muted); display: block; margin-bottom: 
 .quote-card.selected { border-color: var(--accent); background: #141826; }
 
 .quote-text {
+  overflow-wrap: anywhere;
   font-family: var(--font-serif);
   font-size: 1.15rem;
   line-height: 1.65;
@@ -171,6 +172,7 @@ label { font-size: 0.88rem; color: var(--muted); display: block; margin-bottom: 
 /* ── Participant chips ── */
 .chip-list { display: flex; flex-wrap: wrap; gap: 0.3rem; margin-top: 0.5rem; }
 .chip {
+  overflow-wrap: anywhere;
   display: inline-block;
   background: var(--card-bg);
   border: 1px solid var(--border);
@@ -198,6 +200,7 @@ label { font-size: 0.88rem; color: var(--muted); display: block; margin-bottom: 
   margin-bottom: 0.75rem;
 }
 .champion-quote {
+  overflow-wrap: anywhere;
   font-family: var(--font-serif);
   font-size: 1.8rem;
   font-style: italic;
@@ -307,7 +310,22 @@ label { font-size: 0.88rem; color: var(--muted); display: block; margin-bottom: 
   transition: border-color 0.15s;
 }
 .file-upload:hover { border-color: var(--accent); }
-.file-upload input { display: none; }
+.file-upload:focus-within { border-color: var(--accent); outline: 2px solid var(--accent); outline-offset: 2px; }
+/* Visually hidden but still focusable and in the tab order. `display: none`
+   removed the input from the tab order entirely, which made uploading a
+   quotebook - and therefore starting a game - impossible by keyboard. */
+.file-upload input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
 
 /* ── QR container ── */
 .qr-box {
@@ -561,14 +579,21 @@ label { font-size: 0.88rem; color: var(--muted); display: block; margin-bottom: 
   inset: 0;
   background: rgba(0, 0, 0, 0.78);
   display: flex;
-  align-items: center;
+  /* flex-start + scrollable container: centring a card taller than the
+     viewport pushed its dismiss button off-screen inside a fixed element that
+     does not scroll, locking the host out of their own controls. */
+  align-items: flex-start;
   justify-content: center;
   z-index: 1000;
   padding: 1.5rem;
+  overflow-y: auto;
 }
 .overlay-card {
   max-width: 540px;
   width: 100%;
+  margin: auto;
+  max-height: calc(100dvh - 3rem);
+  overflow-y: auto;
 }
 
 /* ── Danger button ──────────────────────────────────────────────────────────── */

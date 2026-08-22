@@ -27,6 +27,12 @@ create table if not exists rate_limits (
 -- intentional, low-risk sliding window (games run minutes, not hours).
 create extension if not exists pg_cron;
 
+-- cron.schedule errors if the job name already exists, so drop first to keep
+-- this whole script safely re-runnable. cron.unschedule throws when the job is
+-- absent, hence the exception swallow.
+do $$ begin perform cron.unschedule('cleanup-old-games'); exception when others then null; end $$;
+do $$ begin perform cron.unschedule('cleanup-old-rate-limits'); exception when others then null; end $$;
+
 select cron.schedule(
   'cleanup-old-games',
   '0 * * * *', -- hourly

@@ -89,19 +89,39 @@ function PlayerView() {
   const [name, setName]               = useState('');
   const [playerToken, setPlayerToken] = useState('');
   const [state, setState]             = useState<GameStatePublic | null>(null);
+  // `error` is fatal and replaces the page; `stale` is a recoverable
+  // connectivity blip shown as a banner over the last-known board.
   const [error, setError]             = useState('');
+  const [stale, setStale]             = useState(false);
+  const [voteError, setVoteError]     = useState('');
   const [voting, setVoting]           = useState<Record<number, boolean>>({});
   const pollRef       = useRef<ReturnType<typeof setInterval> | null>(null);
   const failCountRef  = useRef(0);
   const heartbeatRef  = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Timestamp of the last local optimistic change. Poll responses that were
+  // already in flight before it are dropped rather than applied, so a slow
+  // reply can't resurrect the matchup the player just voted on.
+  const lastMutationRef = useRef(0);
 
-  // Read session from sessionStorage (client-only)
+  // Read session from storage (client-only)
   useEffect(() => {
-    const raw = sessionStorage.getItem(`uq_session_${code}`);
+    const raw = localStorage.getItem(`uq_session_${code}`) ?? sessionStorage.getItem(`uq_session_${code}`);
     if (!raw) { router.replace(`/join?code=${code}`); return; }
-    const session = JSON.parse(raw) as { name: string; token: string };
-    setName(session.name);
-    setPlayerToken(session.token);
+    try {
+      const session = JSON.parse(raw) as { name?: unknown; token?: unknown };
+      if (typeof session.name !== 'string' || !session.name ||
+          typeof session.token !== 'string' || !session.token) {
+        throw new Error('malformed session');
+      }
+      setName(session.name);
+      setPlayerToken(session.token);
+    } catch {
+      // Corrupt or outdated payload - start over rather than throwing out of
+      // the effect, which would blank the page with Next's error screen.
+      localStorage.removeItem(`uq_session_${code}`);
+      sessionStorage.removeItem(`uq_session_${code}`);
+      router.replace(`/join?code=${code}`);
+    }
   }, [code, router]);
 
   useEffect(() => {
@@ -113,40 +133,60 @@ function PlayerView() {
     async function poll() {
       if (inFlight) return;
       inFlight = true;
+      const startedAt = Date.now();
       try {
         const res = await fetch(`/api/game/${code}`, {
           headers: { 'x-player-token': playerToken, 'x-player-name': name },
         });
         if (cancelled) return;
         if (res.ok) {
+          const next = await res.json();
           failCountRef.current = 0;
-          setState(await res.json());
+          // Recovered - clear the banner. Without this, `stale` latched on and
+          // a few seconds offline stranded the player permanently even though
+          // polling had already resumed successfully underneath.
+          setStale(false);
+          if (startedAt >= lastMutationRef.current) setState(next);
         } else if (res.status === 404) {
           setError('Room not found.');
         } else if (++failCountRef.current >= 3) {
-          setError('Connection lost.');
+          setStale(true);
         }
       } catch {
-        if (!cancelled && ++failCountRef.current >= 3) setError('Connection lost.');
+        if (!cancelled && ++failCountRef.current >= 3) setStale(true);
       } finally {
         inFlight = false;
       }
     }
 
-    poll();
-    pollRef.current = setInterval(poll, 2000);
-
-    heartbeatRef.current = setInterval(() => {
+    function beat() {
       fetch(`/api/game/${code}/heartbeat`, {
         method: 'POST',
         headers: { 'x-player-token': playerToken, 'x-player-name': name },
-      });
-    }, HEARTBEAT_MS);
+      }).catch(() => {}); // offline beats are expected; don't surface as unhandled rejections
+    }
+
+    // Mobile browsers suspend timers while the screen is locked or the tab is
+    // backgrounded, so a returning player can be seconds away from the server
+    // considering them gone. Re-sync immediately instead of waiting out the
+    // next tick of either interval.
+    function onVisible() {
+      if (document.visibilityState !== 'visible') return;
+      beat();
+      poll();
+    }
+
+    poll();
+    beat();
+    pollRef.current = setInterval(poll, 2000);
+    heartbeatRef.current = setInterval(beat, HEARTBEAT_MS);
+    document.addEventListener('visibilitychange', onVisible);
 
     return () => {
       cancelled = true;
       if (pollRef.current) clearInterval(pollRef.current);
       if (heartbeatRef.current) clearInterval(heartbeatRef.current);
+      document.removeEventListener('visibilitychange', onVisible);
     };
   }, [code, name, playerToken]);
 
@@ -161,7 +201,7 @@ function PlayerView() {
   async function vote(matchupIndex: number, choice: 'a' | 'b') {
     setVoting(v => ({ ...v, [matchupIndex]: true }));
     try {
-      await fetch(`/api/game/${code}/vote`, {
+      const res = await fetch(`/api/game/${code}/vote`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -170,8 +210,20 @@ function PlayerView() {
         },
         body: JSON.stringify({ matchupIndex, choice }),
       });
+      // Only advance the UI if the server actually recorded the vote. The
+      // optimistic update used to run unconditionally, so a 409 (host already
+      // advanced the round) still slid the player forward, and the next poll
+      // silently rewound them with no explanation.
+      if (!res.ok) {
+        setVoteError(res.status === 409
+          ? 'That round just closed.'
+          : 'Vote did not go through. Try again.');
+        return;
+      }
+      setVoteError('');
+      lastMutationRef.current = Date.now();
       // Optimistic local update so the next matchup appears immediately,
-      // instead of waiting on the next SSE push.
+      // instead of waiting on the next poll.
       setState(prev => {
         if (!prev) return prev;
         const matchups = prev.matchups.map((m, i) => {
@@ -183,6 +235,8 @@ function PlayerView() {
         });
         return { ...prev, matchups };
       });
+    } catch {
+      setVoteError('Vote did not go through. Try again.');
     } finally {
       setVoting(v => ({ ...v, [matchupIndex]: false }));
     }
@@ -191,13 +245,26 @@ function PlayerView() {
   if (error) return (
     <main className="page">
       <div className="alert alert-error">{error}</div>
-      <button className="btn mt-3" onClick={() => router.push('/')}>Go Home</button>
+      <button className="btn mt-3" onClick={() => router.replace('/')}>Go Home</button>
     </main>
   );
-  if (!state || !name) return <main className="page"><p className="text-muted waiting-shimmer">Connecting…</p></main>;
+  // Only fatal before the first successful load; once there's a board to show,
+  // a connectivity blip is a banner rather than an ejection.
+  if (!state || !name) return (
+    <main className="page">
+      {stale
+        ? <>
+            <div className="alert alert-error">Connection lost. Retrying…</div>
+            <button className="btn mt-3" onClick={() => router.replace('/')}>Go Home</button>
+          </>
+        : <p className="text-muted waiting-shimmer">Connecting…</p>}
+    </main>
+  );
 
   return (
     <main className="page">
+      {stale && <div className="alert alert-error mb-2">Connection lost. Retrying…</div>}
+      {voteError && <div className="alert alert-error mb-2">{voteError}</div>}
       <div style={{ marginBottom: '1rem' }}>
         <h2 style={{ fontSize: '1.6rem', marginBottom: '0.25rem' }}>[UN]Quotable</h2>
         <p className="text-sm text-muted">
@@ -339,7 +406,7 @@ function PlayerView() {
               <VotingPieChart popular={popular} total={total} />
             </div>
 
-            <button className="btn mt-3" onClick={() => router.push('/')}>↺ New Game</button>
+            <button className="btn mt-3" onClick={() => router.replace('/')}>↺ New Game</button>
             <BuyMeACoffee />
           </>
         );

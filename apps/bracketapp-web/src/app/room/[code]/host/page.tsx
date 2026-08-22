@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import dynamic from 'next/dynamic';
 import { GameState, Matchup } from '@/lib/types';
@@ -17,7 +17,12 @@ export default function HostPage() {
   const { code } = useParams<{ code: string }>();
   const router = useRouter();
   const [state, setState]           = useState<GameState | null>(null);
+  // `error` is fatal and replaces the page; `stale` is a recoverable
+  // connectivity blip shown as a banner over the last-known board.
   const [error, setError]           = useState('');
+  const [stale, setStale]           = useState(false);
+  const [actionError, setActionError] = useState('');
+  const [tokenChecked, setTokenChecked] = useState(false);
   const [acting, setActing]         = useState(false);
   const [joinUrl, setJoinUrl]       = useState('');
   const [hostToken, setHostToken]   = useState('');
@@ -29,7 +34,14 @@ export default function HostPage() {
 
   useEffect(() => {
     setJoinUrl(`${window.location.origin}/join?code=${code}`);
-    setHostToken(sessionStorage.getItem(`uq_host_${code}`) ?? '');
+    // localStorage, not sessionStorage: sessionStorage is per-tab, so opening
+    // the host URL in a second tab (or restoring one after a crash) left the
+    // page shimmering "Connecting..." forever with no token, no error and no
+    // way out - while the players waited on a host who could not act.
+    setHostToken(localStorage.getItem(`uq_host_${code}`)
+              ?? sessionStorage.getItem(`uq_host_${code}`)
+              ?? '');
+    setTokenChecked(true);
   }, [code]);
 
   useEffect(() => {
@@ -46,14 +58,20 @@ export default function HostPage() {
         if (cancelled) return;
         if (res.ok) {
           failCountRef.current = 0;
+          // Recovered - clear the banner. Without this, `stale` latched on and
+          // a brief blip stranded the host permanently, killing the game for
+          // everyone, even though polling had already resumed underneath.
+          setStale(false);
           setState(await res.json());
         } else if (res.status === 404) {
           setError('Room not found.');
+        } else if (res.status === 401) {
+          setError('This browser is not the host of this game.');
         } else if (++failCountRef.current >= 3) {
-          setError('Connection lost.');
+          setStale(true);
         }
       } catch {
-        if (!cancelled && ++failCountRef.current >= 3) setError('Connection lost.');
+        if (!cancelled && ++failCountRef.current >= 3) setStale(true);
       } finally {
         inFlight = false;
       }
@@ -76,13 +94,63 @@ export default function HostPage() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }, [state?.status]);
 
-  async function action(endpoint: string) {
-    setActing(true);
+  // Escape closes whichever overlay is open. These are the host's only route
+  // back to the controls, so without a keyboard dismissal a viewport that
+  // clipped the button left them stuck.
+  useEffect(() => {
+    if (!showTutorial && !showEndConfirm) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== 'Escape') return;
+      setShowTutorial(false);
+      setShowEndConfirm(false);
+    }
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [showTutorial, showEndConfirm]);
+
+  // The poll replaces `state` with a fresh object every 2s, so anything derived
+  // from it is referentially new each tick and BracketDiagram re-diffs its whole
+  // SVG (500+ nodes on a large bracket) even when the bracket hasn't moved.
+  // Key the memo on the bracket's content only - participant heartbeats churn
+  // constantly and must not count as a change.
+  const bracketKey = state ? JSON.stringify([state.bracketHistory, state.matchups]) : '';
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const allLayers: Matchup[][] = useMemo(
+    () => (state ? [...state.bracketHistory, ...(state.matchups.length > 0 ? [state.matchups] : [])] : []),
+    [bracketKey],
+  );
+
+  // Every mutating call used to ignore its response, so a rejected action
+  // looked identical to a successful one: the button simply un-shimmered.
+  async function post(endpoint: string): Promise<Response | null> {
     try {
-      await fetch(`/api/game/${code}/${endpoint}`, {
+      return await fetch(`/api/game/${code}/${endpoint}`, {
         method: 'POST',
         headers: hostToken ? { 'x-host-token': hostToken } : {},
       });
+    } catch {
+      return null;
+    }
+  }
+
+  function describeFailure(res: Response | null): string {
+    if (!res)                return 'Could not reach the server. Try again.';
+    if (res.status === 401)  return 'This browser is no longer the host of this game.';
+    if (res.status === 409)  return 'That action is not available right now.';
+    if (res.status === 404)  return 'Room not found.';
+    return 'Something went wrong. Try again.';
+  }
+
+  async function action(endpoint: string) {
+    setActing(true);
+    try {
+      const res = await post(endpoint);
+      if (!res || !res.ok) { setActionError(describeFailure(res)); return; }
+      setActionError('');
+      // /advance returns the resulting state, so the champion appears at once
+      // rather than after the next poll tick.
+      const body = await res.json().catch(() => null);
+      if (body?.state) setState(body.state);
     } finally {
       setActing(false);
     }
@@ -91,10 +159,12 @@ export default function HostPage() {
   async function handleStart() {
     setActing(true);
     try {
-      await fetch(`/api/game/${code}/start`, {
-        method: 'POST',
-        headers: hostToken ? { 'x-host-token': hostToken } : {},
-      });
+      const res = await post('start');
+      if (!res || !res.ok) { setActionError(describeFailure(res)); return; }
+      setActionError('');
+      // Only after the server confirms: this used to open regardless, so on a
+      // rejected start the host dismissed a tutorial for a game that had not
+      // begun and waited indefinitely alongside the players.
       if (!skipTutorial) setShowTutorial(true);
     } finally {
       setActing(false);
@@ -105,11 +175,9 @@ export default function HostPage() {
     setShowEndConfirm(false);
     setActing(true);
     try {
-      await fetch(`/api/game/${code}/end`, {
-        method: 'POST',
-        headers: hostToken ? { 'x-host-token': hostToken } : {},
-      });
-      router.push('/');
+      const res = await post('end');
+      if (!res || !res.ok) { setActionError(describeFailure(res)); return; }
+      router.replace('/');
     } finally {
       setActing(false);
     }
@@ -118,17 +186,36 @@ export default function HostPage() {
   if (error) return (
     <main className="page">
       <div className="alert alert-error">{error}</div>
-      <button className="btn mt-3" onClick={() => router.push('/')}>Go Home</button>
+      <button className="btn mt-3" onClick={() => router.replace('/')}>Go Home</button>
     </main>
   );
-  if (!state) return <main className="page"><p className="text-muted waiting-shimmer">Connecting…</p></main>;
+  if (tokenChecked && !hostToken) return (
+    <main className="page">
+      <div className="alert alert-error">
+        This tab isn&apos;t the one that created the game, so it can&apos;t control it.
+        Reopen the game from the tab or device you started it on.
+      </div>
+      <button className="btn mt-3" onClick={() => router.replace('/')}>Go Home</button>
+    </main>
+  );
+  if (!state) return (
+    <main className="page">
+      {stale
+        ? <>
+            <div className="alert alert-error">Connection lost. Retrying…</div>
+            <button className="btn mt-3" onClick={() => router.replace('/')}>Go Home</button>
+          </>
+        : <p className="text-muted waiting-shimmer">Connecting…</p>}
+    </main>
+  );
 
   const participants = Object.keys(state.participants);
-  const allLayers: Matchup[][] = [...state.bracketHistory, ...(state.matchups.length > 0 ? [state.matchups] : [])];
 
   return (
     <>
       <main className="page">
+        {stale && <div className="alert alert-error mb-2">Connection lost. Retrying…</div>}
+        {actionError && <div className="alert alert-error mb-2">{actionError}</div>}
         {/* Header row */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1rem' }}>
           <h2 style={{ fontSize: '1.5rem' }}>
@@ -312,7 +399,7 @@ export default function HostPage() {
 
       {/* ── How to Play tutorial overlay ── */}
       {showTutorial && (
-        <div className="overlay">
+        <div className="overlay" role="dialog" aria-modal="true">
           <div className="card overlay-card">
             <h2 style={{ fontSize: '1.4rem', marginBottom: '1.25rem' }}>[UN]Quotable — How to Play</h2>
             <p style={{ marginBottom: '1rem', lineHeight: 1.7 }}>
@@ -341,7 +428,7 @@ export default function HostPage() {
 
       {/* ── End Game confirmation overlay ── */}
       {showEndConfirm && (
-        <div className="overlay">
+        <div className="overlay" role="dialog" aria-modal="true">
           <div className="card overlay-card">
             <h3 style={{ fontFamily: 'var(--font-sans)', fontWeight: 600, fontSize: '1.1rem', marginBottom: '0.75rem' }}>
               End this game?
@@ -349,7 +436,7 @@ export default function HostPage() {
             <p className="text-sm" style={{ lineHeight: 1.65, marginBottom: '1.5rem', color: 'var(--muted)' }}>
               This will immediately terminate the game and permanently delete all saved data,
               including the quotebook, player list, and vote history.
-              Players will see their current screen until they refresh.
+              Players will be returned to a “Room not found” screen within a few seconds.
             </p>
             <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
               <button className="btn" onClick={() => setShowEndConfirm(false)}>Cancel</button>

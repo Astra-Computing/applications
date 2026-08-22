@@ -33,6 +33,13 @@ export default function HostSetupPage() {
     setFileName(file.name);
     setError('');
     const reader = new FileReader();
+    // Without an error handler a failed read left the filename showing - which
+    // reads as success - with no quotes, no Create button and no explanation.
+    reader.onerror = () => {
+      setError('Could not read that file. Try selecting it again.');
+      setFileName('');
+      setQuotes([]);
+    };
     reader.onload = ev => {
       const text = ev.target?.result as string;
       const parsed = parseQuotebook(text);
@@ -46,6 +53,9 @@ export default function HostSetupPage() {
       }
     };
     reader.readAsText(file);
+    // Clear the input so re-picking the same file fires onChange again, which
+    // matters precisely when the first attempt failed.
+    e.target.value = '';
   }
 
   async function handleCreate() {
@@ -59,7 +69,7 @@ export default function HostSetupPage() {
       });
       if (!res.ok) throw new Error('Server error');
       const { roomCode, hostToken } = await res.json();
-      sessionStorage.setItem(`uq_host_${roomCode}`, hostToken);
+      localStorage.setItem(`uq_host_${roomCode}`, hostToken);
       router.push(`/room/${roomCode}/host`);
     } catch {
       setError('Failed to create game. Is the server running?');
@@ -77,14 +87,17 @@ export default function HostSetupPage() {
       <hr />
 
       <div className="mt-3">
-        <label>Upload quotebook (.txt)</label>
-        <div className="file-upload mt-1" onClick={() => fileRef.current?.click()}>
-          <input ref={fileRef} type="file" accept=".txt" onChange={handleFile} />
+        {/* A real <label for> wrapping a focusable (not display:none) input:
+            the previous click-only <div> left the file picker unreachable by
+            keyboard, so a keyboard-only host could not create a game at all. */}
+        <label htmlFor="quotebook">Upload quotebook (.txt)</label>
+        <label className="file-upload mt-1" htmlFor="quotebook">
+          <input id="quotebook" ref={fileRef} type="file" accept=".txt" onChange={handleFile} />
           {fileName
             ? <p style={{ color: 'var(--text)' }}>{fileName}</p>
-            : <p className="text-muted">Click to choose a .txt file</p>
+            : <p className="text-muted">Choose a .txt file</p>
           }
-        </div>
+        </label>
       </div>
 
       {error && <div className="alert alert-error mt-2">{error}</div>}

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createGame } from '@/lib/gameLogic';
-import { saveState } from '@/lib/gameState';
+import { createGame, generateRoomCode } from '@/lib/gameLogic';
+import { tryCreateState } from '@/lib/gameState';
 import { checkRateLimit } from '@/lib/rateLimit';
 import { Quote } from '@/lib/types';
 
@@ -9,6 +9,7 @@ export const runtime = 'nodejs';
 const MAX_QUOTES    = 512;
 const MAX_TEXT_LEN  = 2000;
 const MAX_AUTHOR_LEN = 200;
+const CODE_RETRIES   = 5;
 
 export async function POST(req: NextRequest) {
   try {
@@ -37,8 +38,18 @@ export async function POST(req: NextRequest) {
     }
 
     const hostToken = crypto.randomUUID();
-    const state = createGame(quotes, hostToken);
-    await saveState(state);
+    // Room codes are 4 letters (456,976 combinations) and rooms linger for up
+    // to 24h, so collisions are a question of when, not if. Insert-if-absent
+    // and retry with a fresh code rather than upserting over a live game.
+    let state = createGame(quotes, hostToken);
+    let created = await tryCreateState(state);
+    for (let attempt = 0; attempt < CODE_RETRIES && !created; attempt++) {
+      state = { ...state, roomCode: generateRoomCode() };
+      created = await tryCreateState(state);
+    }
+    if (!created) {
+      return NextResponse.json({ error: 'Could not allocate a room code. Try again.' }, { status: 503 });
+    }
     return NextResponse.json({ roomCode: state.roomCode, hostToken });
   } catch (e) {
     console.error(e);

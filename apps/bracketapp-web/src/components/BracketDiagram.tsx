@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useEffect } from 'react';
+import { memo, useRef, useEffect } from 'react';
 import { Matchup } from '@/lib/types';
 import { truncate, getVoteCounts } from '@/lib/gameLogic';
 
@@ -24,17 +24,25 @@ function matchupCenterY(matchupIdx: number, roundIdx: number, firstRoundCount: n
   return PAD_Y + (matchupIdx + 0.5) * slotsPerMatchup * SLOT_H;
 }
 
-export default function BracketDiagram({ rounds, currentRound }: Props) {
-  if (rounds.length === 0) return null;
-
+function BracketDiagram({ rounds, currentRound }: Props) {
+  // Hooks must run before any early return - the previous order (return null
+  // above useRef/useEffect) is a rules-of-hooks violation that throws
+  // "Rendered more hooks than during the previous render" the first time this
+  // component is rendered with an empty `rounds` and then a non-empty one.
   const scrollRef = useRef<HTMLDivElement>(null);
+  const isEmpty = rounds.length === 0 || rounds[0].length === 0;
 
   // Scroll to the rightmost column whenever a new round is added
   useEffect(() => {
+    if (isEmpty) return;
     if (scrollRef.current) {
       scrollRef.current.scrollLeft = scrollRef.current.scrollWidth;
     }
-  }, [rounds.length]);
+  }, [rounds.length, isEmpty]);
+
+  // Guards an empty first round too: Math.max() over no elements is -Infinity,
+  // which propagates into the SVG height as NaN.
+  if (isEmpty) return null;
 
   const firstRoundCount = rounds[0].length;
 
@@ -191,6 +199,8 @@ export default function BracketDiagram({ rounds, currentRound }: Props) {
       <svg
         width={totalWidth}
         height={totalHeight}
+        role="img"
+        aria-label={`Tournament bracket, ${rounds.length} round${rounds.length === 1 ? '' : 's'}, currently on round ${currentRound}`}
         style={{ display: 'block', fontFamily: 'var(--font-sans)' }}
       >
         {lines}
@@ -199,3 +209,7 @@ export default function BracketDiagram({ rounds, currentRound }: Props) {
     </div>
   );
 }
+
+// The host page re-renders every 2s from its poll; with a referentially stable
+// `rounds` (memoized upstream) this skips re-diffing the whole SVG.
+export default memo(BracketDiagram);

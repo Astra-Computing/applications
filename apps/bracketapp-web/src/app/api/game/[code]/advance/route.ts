@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { loadAndUpdate, deleteState, isValidCode } from '@/lib/gameState';
+import { loadAndUpdate, isValidCode } from '@/lib/gameState';
 import { advanceRound } from '@/lib/gameLogic';
 
 export const runtime = 'nodejs';
@@ -21,6 +21,13 @@ export async function POST(req: NextRequest, { params }: { params: { code: strin
   if (!state)    return NextResponse.json({ error: 'Room not found' }, { status: 404 });
   if (authError) return NextResponse.json({ error: 'Unauthorised' }, { status: 401 });
   if (phaseError) return NextResponse.json({ error: 'Voting is not open' }, { status: 409 });
-  if (state.status === 'done') await deleteState(code);
-  return NextResponse.json({ ok: true });
+  // Deliberately NOT deleted when the game reaches 'done'. Deleting here raced
+  // the 2s client poll: every client 404'd before it could ever observe the
+  // final state, so nobody - host included - saw the champion. The room is
+  // removed by the host's explicit "End Game" (/end) or the 24h sweep.
+  // Clients stop polling once they see 'done', so the row goes idle either way.
+  // Strip secrets exactly as the GET route does - the raw state carries every
+  // player's token, which the host has no business receiving.
+  const { hostToken: _h, playerTokens: _p, ...hostState } = state;
+  return NextResponse.json({ ok: true, state: hostState });
 }
