@@ -24,3 +24,6 @@ npm-debug.log*
 # TypeScript
 *.tsbuildinfo
 next-env.d.ts
+
+# Quotebook source data - real content, kept local and deliberately untracked
+quotebooks/
