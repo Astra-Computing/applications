@@ -1,0 +1,13 @@
+# Normalize all text to LF in the repository and in the working tree on every
+# platform. Without this, core.autocrlf=true rewrites checkouts to CRLF on
+# Windows and git reports files as modified forever.
+* text=auto eol=lf
+
+# Never run line-ending conversion on binaries.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
