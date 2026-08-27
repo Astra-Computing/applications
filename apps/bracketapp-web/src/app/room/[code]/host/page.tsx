@@ -8,6 +8,7 @@ import { allVoted, getVoteCounts, truncate, PLAYER_TIMEOUT_MS } from '@/lib/game
 import QuoteCard from '@/components/QuoteCard';
 import VoteBar from '@/components/VoteBar';
 import BuyMeACoffee from '@/components/BuyMeACoffee';
+import ResultsSlideshow from '@/components/ResultsSlideshow';
 
 const QRCode        = dynamic(() => import('react-qr-code'), { ssr: false });
 const BracketDiagram = dynamic(() => import('@/components/BracketDiagram'), { ssr: false });
@@ -29,6 +30,10 @@ export default function HostPage() {
   const [skipTutorial, setSkipTutorial] = useState(false);
   const [showTutorial, setShowTutorial] = useState(false);
   const [showEndConfirm, setShowEndConfirm] = useState(false);
+  // The round the host is currently being shown a recap of, captured from the
+  // /advance response. Host-only and client-only: players never see it, and a
+  // reload during `results` lands straight on the bracket.
+  const [slideshowRound, setSlideshowRound] = useState<Matchup[] | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const failCountRef = useRef(0);
 
@@ -150,7 +155,14 @@ export default function HostPage() {
       // /advance returns the resulting state, so the champion appears at once
       // rather than after the next poll tick.
       const body = await res.json().catch(() => null);
-      if (body?.state) setState(body.state);
+      if (body?.state) {
+        setState(body.state);
+        if (endpoint === 'advance') {
+          const history: Matchup[][] = body.state.bracketHistory ?? [];
+          const resolved = history[history.length - 1];
+          if (resolved?.length) setSlideshowRound(resolved);
+        }
+      }
     } finally {
       setActing(false);
     }
@@ -210,23 +222,58 @@ export default function HostPage() {
   );
 
   const participants = Object.keys(state.participants);
+  const slideshowActive = slideshowRound !== null;
+
+  // The one control that moves the game forward, hoisted into the round header.
+  // `ready` mirrors the server's own phase gate so the button never promises an
+  // action the API would reject: /advance accepts only `voting`, /start only
+  // `results` (the lobby has its own Start Game flow with the tutorial opt-out).
+  const headerAction =
+    state.status === 'voting'
+      ? {
+          label: acting ? 'Resolving…' : '▶ Show Results',
+          onClick: () => action('advance'),
+          ready: allVoted(state),
+          status: 'Waiting for voting to finish…',
+        }
+      : state.status === 'results'
+        ? {
+            label: acting ? 'Starting…' : `▶ Start Round ${state.round}`,
+            onClick: () => action('start'),
+            // The round on screen has already been resolved; keep the host from
+            // starting the next one out from under their own recap.
+            ready: !slideshowActive,
+            status: 'Showing this round’s results…',
+          }
+        : null;
 
   return (
     <>
       <main className="page">
         {stale && <div className="alert alert-error mb-2">Connection lost. Retrying…</div>}
         {actionError && <div className="alert alert-error mb-2">{actionError}</div>}
-        {/* Header row */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1rem' }}>
-          <h2 style={{ fontSize: '1.5rem' }}>
+        {/* Header row — round designation, then the forward control */}
+        <div className="round-header">
+          <h2 className="round-header-title">
             {state.status === 'done' ? 'Game Over' : `Round ${state.round} of ${state.totalRounds}`}
           </h2>
+          {headerAction && (
+            <div className="round-header-action">
+              <button
+                className={`btn btn-primary${acting ? ' waiting-shimmer' : ''}`}
+                onClick={headerAction.onClick}
+                disabled={acting || !headerAction.ready}
+              >
+                {headerAction.label}
+              </button>
+              {!headerAction.ready && !acting && (
+                <p className="round-header-status waiting-shimmer">{headerAction.status}</p>
+              )}
+            </div>
+          )}
+          <div className="round-header-spacer" />
           {state.status !== 'done' && (
-            <button
-              className="btn"
-              style={{ fontSize: '0.78rem', padding: '0.3rem 0.75rem', color: 'var(--muted)', marginTop: '0.2rem' }}
-              onClick={() => setShowEndConfirm(true)}
-            >
+            <button className="btn round-header-end" onClick={() => setShowEndConfirm(true)}>
               End Game
             </button>
           )}
@@ -321,11 +368,8 @@ export default function HostPage() {
               );
             })}
             {allVoted(state) ? (
-              <div>
-                <div className="alert alert-success"><span className="waiting-shimmer">Everyone's voted — ready to move on!</span></div>
-                <button className={`btn btn-primary mt-2${acting ? ' waiting-shimmer' : ''}`} onClick={() => action('advance')} disabled={acting}>
-                  {acting ? 'Resolving…' : 'Show Results'}
-                </button>
+              <div className="alert alert-success">
+                <span className="waiting-shimmer">Everyone's voted — ready to move on!</span>
               </div>
             ) : (
               <div className="alert alert-info">
@@ -368,16 +412,13 @@ export default function HostPage() {
             <p className="text-sm text-muted mb-2">
               Up next: Round {state.round} — {state.matchups.length} matchup{state.matchups.length !== 1 ? 's' : ''}
             </p>
-            <button className={`btn btn-primary${acting ? ' waiting-shimmer' : ''}`} onClick={() => action('start')} disabled={acting}>
-              {acting ? 'Starting…' : `▶ Start Round ${state.round}`}
-            </button>
           </>
         )}
 
         {/* Done */}
         {state.status === 'done' && state.champion && (
           <>
-            <Confetti />
+            {!slideshowActive && <Confetti />}
             <div className="champion-card">
               <div className="champion-label">🏆 Champion</div>
               <div className="champion-quote">"{state.champion.text}"</div>
@@ -396,6 +437,11 @@ export default function HostPage() {
           </>
         )}
       </main>
+
+      {/* ── Round-results recap (host only, client only) ── */}
+      {slideshowRound && (
+        <ResultsSlideshow round={slideshowRound} onFinish={() => setSlideshowRound(null)} />
+      )}
 
       {/* ── How to Play tutorial overlay ── */}
       {showTutorial && (

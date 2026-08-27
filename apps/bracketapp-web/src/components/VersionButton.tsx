@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 
 const HISTORY = [
+  { v: '0.4.1', note: 'Added host results slideshow; Start Next Round moved to the top of the host screen' },
   { v: '0.4.0', note: 'Champion screen now shows; reconnects recover; many reliability and accessibility fixes' },
   { v: '0.3.0', note: 'Voting now shows one matchup at a time; smaller coffee card' },
   { v: '0.2.7', note: 'Animated wave banners; fixed home title on mobile' },

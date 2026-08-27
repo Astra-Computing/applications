@@ -714,3 +714,132 @@ label { font-size: 0.88rem; color: var(--muted); display: block; margin-bottom: 
   pointer-events: auto;
 }
 .version-modal { max-width: 360px; }
+
+/* ── Host round header ──────────────────────────────────────────────────────── */
+/* The round designation and the game's forward control live together at the top
+   of the host screen, so the host never has to scroll past a board to move on. */
+.round-header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.75rem 1rem;
+  margin-bottom: 1rem;
+}
+.round-header-title { font-size: 1.5rem; }
+.round-header-action { display: flex; align-items: center; gap: 0.7rem; }
+.round-header-status { font-size: 0.78rem; }
+.round-header-spacer { flex: 1 1 auto; }
+.round-header-end { font-size: 0.78rem; padding: 0.3rem 0.75rem; color: var(--muted); }
+
+/* ── Host round-results slideshow ───────────────────────────────────────────── */
+/* A full-bleed presentation state, not a dialog — it sits above the host board
+   but below the modal overlays (z-index 1000) so End Game still wins. */
+.slideshow {
+  position: fixed;
+  inset: 0;
+  z-index: 900;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding: 3vh 3%;
+  overflow: hidden;
+  outline: none;
+}
+.slideshow-stage {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.5rem;
+}
+.slide-tile {
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+/* The tank: blue rises from the bottom of the tile to this side's share of the
+   matchup's votes. Same accent as the vote bar, just a longer, calmer pour. */
+.slide-fill {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 0;
+  height: var(--fill-height, 0%);
+  background: var(--accent);
+  opacity: 0.32;
+  animation: results-fill 2s ease-out both;
+}
+@keyframes results-fill {
+  from { height: 0%; }
+  to   { height: var(--fill-height, 0%); }
+}
+/* QuoteCard is reused verbatim so the slideshow inherits the game's quote
+   rules; its own surface is dropped because .slide-tile already provides one. */
+.slide-tile .quote-card {
+  position: relative;
+  z-index: 1;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  background: none;
+  border: none;
+  border-radius: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem;
+}
+.slide-tile .quote-text {
+  font-size: clamp(1.15rem, 2.1vw, 2rem);
+  text-align: center;
+}
+.slide-score {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 0.4rem;
+  padding: 0.9rem 1rem 1.2rem;
+}
+.slide-score-num { font-size: 2rem; font-weight: 600; line-height: 1; color: var(--text); }
+.slide-score-label,
+.slide-score-bye,
+.slide-empty-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.slide-tile-empty {
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border-style: dashed;
+}
+.slide-empty-label { color: var(--muted-dark); }
+.slideshow-footer { text-align: center; letter-spacing: 0.08em; }
+
+@media (prefers-reduced-motion: reduce) {
+  /* Skip the pour. The tile is already sized to its final level and the vote
+     count carries the same information, so nothing is lost. */
+  .slide-fill { animation: none; }
+}
+
+@media (max-width: 600px) {
+  /* Host-facing feature, but a phone must still be able to read it: stack the
+     tiles rather than squeezing two quotes into half a phone's width. */
+  .slideshow { padding: 2vh 3%; gap: 0.6rem; }
+  .slideshow-stage { grid-template-columns: 1fr; grid-template-rows: 1fr 1fr; gap: 0.75rem; }
+  .slide-tile .quote-card { padding: 1rem; }
+  .slide-tile .quote-text { font-size: 1rem; }
+  .slide-score { padding: 0.5rem 0.75rem 0.7rem; }
+  .slide-score-num { font-size: 1.4rem; }
+}
