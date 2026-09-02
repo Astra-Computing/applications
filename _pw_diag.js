@@ -1,4 +1,11 @@
-const { chromium } = require('/tmp/pw-check/node_modules/playwright');
+// Playwright deliberately lives OUTSIDE the repo, at /workspace/tools/playwright.
+// `stop-dev.ps1` runs `docker compose down`, which *removes* the container and
+// everything in its filesystem - which is how the previous /tmp/pw-check install
+// was lost. /workspace is a bind mount to the Windows drive, so both the package
+// and the browser binaries survive. The env var must be set before the require:
+// without it Playwright looks in ~/.cache/ms-playwright and finds nothing.
+process.env.PLAYWRIGHT_BROWSERS_PATH ||= '/workspace/tools/playwright/browsers';
+const { chromium } = require('/workspace/tools/playwright/node_modules/playwright');
 const BASE = 'http://localhost:3000';
 const QUOTES = [
   { text: 'Quote one', author: 'Author A' },

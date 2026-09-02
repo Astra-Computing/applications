@@ -190,12 +190,24 @@ function PlayerView() {
     };
   }, [code, name, playerToken]);
 
+  // Previous phase, so the scroll below can tell "the game moved on" from
+  // "this component just mounted".
+  const prevStatusRef = useRef<string | null>(null);
+
   useEffect(() => {
-    if (state?.status === 'done') {
+    const status = state?.status ?? null;
+    if (status === 'done') {
       if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
       if (heartbeatRef.current) { clearInterval(heartbeatRef.current); heartbeatRef.current = null; }
     }
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    // Jump to the top only when the phase actually changed. This used to run
+    // on every pass including the first, and `behavior: 'smooth'` animated the
+    // whole page on arrival - which reads as the page sliding out from under
+    // the player rather than as a deliberate transition.
+    if (prevStatusRef.current !== null && prevStatusRef.current !== status) {
+      window.scrollTo({ top: 0 });
+    }
+    prevStatusRef.current = status;
   }, [state?.status]);
 
   async function vote(matchupIndex: number, choice: 'a' | 'b') {
@@ -263,10 +275,19 @@ function PlayerView() {
 
   return (
     <main className="page">
-      {stale && <div className="alert alert-error mb-2">Connection lost. Retrying…</div>}
-      {voteError && <div className="alert alert-error mb-2">{voteError}</div>}
+      {/* Fixed, not in flow. These come and go mid-game - a failed vote, a
+          dropped poll - and inserting them above the board shoved everything
+          below them down, moving the vote buttons under the player's thumb at
+          exactly the moment they were tapping one. */}
+      {(stale || voteError) && (
+        <div className="player-toasts" role="status" aria-live="polite">
+          {stale && <div className="alert alert-error">Connection lost. Retrying…</div>}
+          {voteError && <div className="alert alert-error">{voteError}</div>}
+        </div>
+      )}
+      {/* No wordmark here: the top banner already carries the logo and
+          "Quotable - The Game" directly above this line. */}
       <div style={{ marginBottom: '1rem' }}>
-        <h2 style={{ fontSize: '1.6rem', marginBottom: '0.25rem' }}>[UN]Quotable</h2>
         <p className="text-sm text-muted">
           Room <strong style={{ color: 'var(--text)' }}>{code}</strong>
           {' · '}Playing as <strong style={{ color: 'var(--text)' }}>{name}</strong>
@@ -304,7 +325,7 @@ function PlayerView() {
             <p className="text-xs text-muted mb-2">Quotes are anonymous. Vote for whichever speaks to you.</p>
 
             {current ? (
-              <div key={current.i} className="matchup-enter">
+              <div key={current.i} className="matchup-enter player-matchup">
                 <p className="match-header">Matchup {voteCount + 1} of {indexed.length}</p>
                 <div className="grid-3">
                   <div className="flex-col" style={{ gap: '0.5rem' }}>
@@ -407,7 +428,7 @@ function PlayerView() {
             </div>
 
             <button className="btn mt-3" onClick={() => router.replace('/')}>↺ New Game</button>
-            <BuyMeACoffee />
+            <BuyMeACoffee fullWidth />
           </>
         );
       })()}

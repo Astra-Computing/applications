@@ -1,12 +1,25 @@
 // Ad-hoc smoke test for the host round-results slideshow (v0.4.1).
-// Run inside the dev container, where playwright + chromium are installed:
-//   docker exec dev-env node /workspace/projects/applications/apps/bracketapp-web/_pw_slideshow.js
+// Run inside the dev container (playwright lives at /workspace/tools/playwright):
+//   docker exec dev-env node /workspace/projects/bracketapp-web/_pw_slideshow.js
 // Drives one real host browser context and three separate player contexts
 // against the live dev server, so the localStorage-token / 2s-polling path is
 // exercised for real rather than simulated in a single tab.
-const { chromium } = require('/tmp/pw-check/node_modules/playwright');
+// Playwright deliberately lives OUTSIDE the repo, at /workspace/tools/playwright.
+// `stop-dev.ps1` runs `docker compose down`, which *removes* the container and
+// everything in its filesystem - which is how the previous /tmp/pw-check install
+// was lost. /workspace is a bind mount to the Windows drive, so both the package
+// and the browser binaries survive. The env var must be set before the require:
+// without it Playwright looks in ~/.cache/ms-playwright and finds nothing.
+process.env.PLAYWRIGHT_BROWSERS_PATH ||= '/workspace/tools/playwright/browsers';
+const { chromium } = require('/workspace/tools/playwright/node_modules/playwright');
 const fs = require('fs');
-const OUT = '/tmp/pw-check/shots-slideshow';
+// Every timeout below is multiplied by this. The Next dev server runs
+// Turbopack inside Docker on a Windows bind mount, where a cold route compile
+// alone can take 20-60s - the original 30s limits were tuned against a warm
+// server and time out on a first run, which looks exactly like a product bug
+// and is not one. Override with PW_TIMEOUT_SCALE=1 against a production build.
+const TS = Number(process.env.PW_TIMEOUT_SCALE || 4);
+const OUT = '/workspace/tools/playwright/shots-slideshow';
 fs.mkdirSync(OUT, { recursive: true });
 const BASE = 'http://localhost:3000';
 const R = {};
@@ -48,15 +61,21 @@ async function newGame(playerNames) {
 async function hostPage(browser, roomCode, hostToken, opts) {
   const ctx = await browser.newContext(Object.assign({ viewport: { width: 1600, height: 950 } }, opts || {}));
   const page = await ctx.newPage();
+  // goto() and any call without an explicit timeout use these.
+  page.setDefaultTimeout(30000 * TS);
+  page.setDefaultNavigationTimeout(30000 * TS);
   await page.addInitScript(a => localStorage.setItem('uq_host_' + a[0], a[1]), [roomCode, hostToken]);
   await page.goto(BASE + '/room/' + roomCode + '/host', { waitUntil: 'domcontentloaded' });
-  await page.waitForSelector('.round-header, .host-info-bar', { timeout: 30000 });
+  await page.waitForSelector('.round-header, .host-info-bar', { timeout: 30000 * TS });
   return { ctx, page };
 }
 
 async function playerPage(browser, roomCode, p, viewport) {
   const ctx = await browser.newContext({ viewport: viewport || { width: 390, height: 844 } });
   const page = await ctx.newPage();
+  // goto() and any call without an explicit timeout use these.
+  page.setDefaultTimeout(30000 * TS);
+  page.setDefaultNavigationTimeout(30000 * TS);
   await page.addInitScript(a =>
     localStorage.setItem('uq_session_' + a[0], JSON.stringify({ name: a[1], token: a[2] })),
     [roomCode, p.name, p.token]);
@@ -72,7 +91,7 @@ async function waitForRound(page, n) {
     const h = document.querySelector('h3');
     return !!h && h.textContent.indexOf('Round ' + r + ' —') !== -1
         && !!document.querySelector('.matchup-enter .match-header');
-  }, n, { timeout: 30000 });
+  }, n, { timeout: 30000 * TS });
 }
 
 // Vote for side `pick` on every open matchup, through the real player UI.
@@ -80,7 +99,7 @@ async function voteAll(page, pick, round) {
   if (round) await waitForRound(page, round);
   for (let guard = 0; guard < 12; guard++) {
     if (await page.$('.alert-success')) return;
-    const ok = await page.waitForSelector('.matchup-enter .match-header', { timeout: 20000 }).catch(() => null);
+    const ok = await page.waitForSelector('.matchup-enter .match-header', { timeout: 20000 * TS }).catch(() => null);
     if (!ok) return;
     const header = await page.$eval('.match-header', el => el.textContent);
     const cols = await page.$$('.grid-3 .flex-col');
@@ -89,14 +108,14 @@ async function voteAll(page, pick, round) {
     await page.waitForFunction(h => {
       const cur = document.querySelector('.match-header');
       return (cur && cur.textContent !== h) || document.querySelector('.alert-success');
-    }, header, { timeout: 20000 }).catch(() => {});
+    }, header, { timeout: 20000 * TS }).catch(() => {});
   }
 }
 
 const waitForEnabled = page => page.waitForFunction(() => {
   const b = document.querySelector('.round-header .btn-primary');
   return !!b && !b.disabled;
-}, null, { timeout: 30000 });
+}, null, { timeout: 30000 * TS });
 
 async function headerState(page) {
   return page.evaluate(() => {
@@ -161,7 +180,7 @@ async function main() {
   for (const p of g.players) players.push(await playerPage(browser, g.roomCode, p));
 
   await api('/api/game/' + g.roomCode + '/start', { method: 'POST', headers: { 'x-host-token': g.hostToken } });
-  await host.page.waitForFunction(() => !!document.querySelector('.round-header .btn-primary'), null, { timeout: 25000 });
+  await host.page.waitForFunction(() => !!document.querySelector('.round-header .btn-primary'), null, { timeout: 25000 * TS });
 
   log('R1_header_before_votes', await headerState(host.page));
   await host.page.screenshot({ path: OUT + '/01-voting-header.png' });
@@ -175,7 +194,7 @@ async function main() {
   log('R1_header_all_voted', await headerState(host.page));
 
   await host.page.click('.round-header .btn-primary');
-  await host.page.waitForSelector('.slideshow', { timeout: 20000 });
+  await host.page.waitForSelector('.slideshow', { timeout: 20000 * TS });
   log('R1_slideshow_appeared', true);
   log('R1_header_during_slideshow', await headerState(host.page));
 
@@ -212,9 +231,9 @@ async function main() {
   }));
   console.log('  R1_slides:', JSON.stringify(R.R1_slides, null, 2));
 
-  await host.page.waitForSelector('.slideshow', { state: 'detached', timeout: 25000 });
+  await host.page.waitForSelector('.slideshow', { state: 'detached', timeout: 25000 * TS });
   log('R1_slideshow_auto_finished', true);
-  await host.page.waitForSelector('.result-row', { timeout: 10000 });
+  await host.page.waitForSelector('.result-row', { timeout: 10000 * TS });
   log('R1_results_rows', await host.page.$$eval('.result-row', els => els.length));
   log('R1_header_after_slideshow', await headerState(host.page));
   await host.page.screenshot({ path: OUT + '/03-results-after.png', fullPage: true });
@@ -224,18 +243,18 @@ async function main() {
   await host.page.waitForFunction(() => {
     const t = document.querySelector('.round-header-title');
     return !!t && t.textContent.indexOf('Round 2') !== -1;
-  }, null, { timeout: 20000 });
+  }, null, { timeout: 20000 * TS });
   for (let i = 0; i < 3; i++) await waitForRound(players[i].page, 2);
   log('R2_header_voting', await headerState(host.page));
   for (let i = 0; i < 3; i++) await voteAll(players[i].page, i === 2 ? 'b' : 'a', 2);
   await waitForEnabled(host.page);
   await host.page.click('.round-header .btn-primary');
-  await host.page.waitForSelector('.slideshow', { timeout: 20000 });
+  await host.page.waitForSelector('.slideshow', { timeout: 20000 * TS });
 
   const sBefore = await host.page.evaluate(() => window.scrollY);
   log('R2_focus_at_skip', await host.page.evaluate(() => document.activeElement ? document.activeElement.className : null));
   await host.page.keyboard.press('Space');
-  await host.page.waitForSelector('.slideshow', { state: 'detached', timeout: 6000 });
+  await host.page.waitForSelector('.slideshow', { state: 'detached', timeout: 6000 * TS });
   log('R2_space_skipped', true);
   log('R2_scroll_unchanged', sBefore === await host.page.evaluate(() => window.scrollY));
   log('R2_header_after_skip', await headerState(host.page));
@@ -246,13 +265,13 @@ async function main() {
   await host.page.waitForFunction(() => {
     const t = document.querySelector('.round-header-title');
     return !!t && t.textContent.indexOf('Round 3') !== -1;
-  }, null, { timeout: 20000 });
+  }, null, { timeout: 20000 * TS });
   for (let i = 0; i < 3; i++) await waitForRound(players[i].page, 3);
   log('R3_header_voting', await headerState(host.page));
   for (let i = 0; i < 3; i++) await voteAll(players[i].page, i === 2 ? 'b' : 'a', 3);
   await waitForEnabled(host.page);
   await host.page.click('.round-header .btn-primary');
-  await host.page.waitForSelector('.slideshow', { timeout: 20000 });
+  await host.page.waitForSelector('.slideshow', { timeout: 20000 * TS });
   log('final_slideshow_shown', true);
   const finalSlide = await readSlide(host.page);
   R.final_slide = finalSlide && {
@@ -263,7 +282,7 @@ async function main() {
   await host.page.waitForTimeout(2600);
   await host.page.screenshot({ path: OUT + '/04-final-slide.png' });
   await host.page.keyboard.press('Space');
-  await host.page.waitForSelector('.champion-card', { timeout: 15000 });
+  await host.page.waitForSelector('.champion-card', { timeout: 15000 * TS });
   log('champion_text', await host.page.$eval('.champion-quote', el => el.innerText));
   log('champion_author_shown', await host.page.$$eval('.champion-author', els => els.length) > 0);
   log('done_header', await headerState(host.page));
@@ -280,7 +299,7 @@ async function main() {
   const h2 = await hostPage(browser, g2.roomCode, g2.hostToken, { reducedMotion: 'reduce' });
   await waitForEnabled(h2.page);
   await h2.page.click('.round-header .btn-primary');
-  await h2.page.waitForSelector('.slideshow', { timeout: 20000 });
+  await h2.page.waitForSelector('.slideshow', { timeout: 20000 * TS });
   await h2.page.waitForTimeout(150);   // well inside the 2s pour
   const rm = await readSlide(h2.page);
   R.reduced_motion = rm && rm.tiles.map(t => ({
@@ -299,7 +318,7 @@ async function main() {
   const h3 = await hostPage(browser, g3.roomCode, g3.hostToken, { viewport: { width: 390, height: 844 } });
   await waitForEnabled(h3.page);
   await h3.page.click('.round-header .btn-primary');
-  await h3.page.waitForSelector('.slideshow', { timeout: 20000 });
+  await h3.page.waitForSelector('.slideshow', { timeout: 20000 * TS });
   await h3.page.waitForTimeout(2600);
   const m = await readSlide(h3.page);
   R.mobile = m && {

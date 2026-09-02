@@ -103,10 +103,18 @@ export function castVote(state: GameState, matchupIndex: number, playerName: str
   return { ...state, matchups };
 }
 
-// Generous relative to the 8s heartbeat: mobile browsers suspend timers when
-// the screen locks or the tab is backgrounded, and at 24s a player glancing at
-// a notification dropped off the active roster and had their vote skipped.
-export const PLAYER_TIMEOUT_MS = 45_000;
+// Five minutes, and deliberately enormous next to the 8s heartbeat. Mobile
+// browsers suspend timers whenever the screen locks or the tab is backgrounded,
+// so this is not really a liveness measure - it is how long a player may look
+// at something else and still be holding their seat. 24s skipped the votes of
+// anyone glancing at a notification; 45s still dropped players who took a call
+// or answered a message.
+//
+// The cost is on the other side: `allVoted` below only unlocks the host's
+// "Show Results" once every *active* player has voted, so someone who truly
+// leaves now holds that gate shut for five minutes rather than 45s. The host
+// advancing early is the intended escape hatch, and always was.
+export const PLAYER_TIMEOUT_MS = 300_000;
 
 export function allVoted(state: GameState, now = Date.now()): boolean {
   const active = Object.entries(state.participants)

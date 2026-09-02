@@ -58,7 +58,13 @@ function parseQuoteLine(raw: string): Quote | null {
       speakers.push(m[1].trim());
       turns.push(m[2].trim());
     }
-    if (speakers.length >= 2 && /\t| {2,}/.test(line)) {
+    // A tab or 2+ spaces is the *usual* separator, but real quotebooks also
+    // write exchanges with a single space: `Jack: "..." Max:"Myth."`. Two or
+    // more `Name: "quoted"` segments starting at the very beginning of the line
+    // is already unambiguous on its own, so accept that too - otherwise the
+    // line falls all the way through to the no-attribution branch and the
+    // speakers' names end up embedded in the quote text.
+    if (speakers.length >= 2 && (firstMatchIdx === 0 || /\t| {2,}/.test(line))) {
       return {
         text: turns.map(t => `"${t}"`).join('\n'),
         author: dedupe(speakers).join(', '),
@@ -102,6 +108,23 @@ function parseQuoteLine(raw: string): Quote | null {
     if (text && author) return { text: stripOuterQuotes(text), author };
   }
 
+  // ── 4b. Unquoted speaker form: `Jon: What exactly is this proving out?` ──
+  // Deliberately last, so every quote-aware strategy above gets first refusal
+  // and this can only ever rescue a line that would otherwise be filed as
+  // Unknown with the speaker's name still stuck to the front of the text.
+  //
+  // The name is held to one-to-three capitalised words. That guard is the whole
+  // reason this is safe: `I have one rule: never lie` is four words and stays a
+  // quote, where a looser rule would attribute it to "I have one rule".
+  const colonIdx = line.indexOf(':');
+  if (colonIdx > 0) {
+    const name = line.slice(0, colonIdx).trim();
+    const rest = line.slice(colonIdx + 1).trim();
+    if (rest && /^[A-Z][\w.'\u2019-]*(?:\s+[A-Z][\w.'\u2019-]*){0,2}$/.test(name)) {
+      return { text: stripOuterQuotes(rest), author: name };
+    }
+  }
+
   // ── 5. No attribution found ──────────────────────────────────────────────
   return { text: stripOuterQuotes(line), author: 'Unknown' };
 }
@@ -129,6 +152,16 @@ function matchAttribution(after: string): string | undefined {
   if (s[0] === '-' && s.length > 1 && /\w/.test(s[1])) {
     return s.slice(1).trim() || 'Unknown';
   }
+
+  // Bare name, no separator at all: `"quote text" jeron`. Guarded, because the
+  // same position can hold narration - `"Hello" he said` must NOT be attributed
+  // to "he said". A single word is taken as a name (quotebooks often use a bare
+  // first name, lowercase included); two or three words are taken only when
+  // every one of them is capitalised.
+  const words = s.split(/\s+/);
+  const NAME = /^[A-Za-z][\w.'\u2019-]*$/;
+  if (words.length === 1 && NAME.test(words[0])) return s;
+  if (words.length <= 3 && words.every(w => /^[A-Z][\w.'\u2019-]*$/.test(w))) return s;
 
   // Content present but not an attribution pattern (e.g. more quote text follows)
   return undefined;

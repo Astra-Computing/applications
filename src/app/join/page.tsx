@@ -1,16 +1,29 @@
 'use client';
 
-import { Suspense, useState } from 'react';
+import { Suspense, useEffect, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 
 function JoinForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const [code, setCode] = useState(searchParams.get('code')?.toUpperCase() ?? '');
+  // Held separately from `code` so the focus effect below keys off "did we
+  // arrive with a code in the URL", not "is the box non-empty right now".
+  const scannedCode = searchParams.get('code')?.toUpperCase() ?? '';
+  const [code, setCode] = useState(scannedCode);
   const [name, setName] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const nameRef = useRef<HTMLInputElement>(null);
+
+  // Scanning the QR fills the room code in for you, so the only thing left to
+  // do is type a name - start there rather than making the player tap the
+  // second box themselves. Note the on-screen keyboard may or may not open:
+  // mobile browsers commonly refuse to raise it for a focus() that didn't come
+  // from a tap. The field is focused either way, so the first keystroke lands.
+  useEffect(() => {
+    if (scannedCode) nameRef.current?.focus();
+  }, [scannedCode]);
 
   async function handleJoin() {
     const trimCode = code.trim().toUpperCase();
@@ -86,6 +99,7 @@ function JoinForm() {
           <label htmlFor="name">Your Name</label>
           <input
             id="name"
+            ref={nameRef}
             className="input"
             type="text"
             placeholder="Player"

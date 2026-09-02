@@ -9,6 +9,7 @@ import QuoteCard from '@/components/QuoteCard';
 import VoteBar from '@/components/VoteBar';
 import BuyMeACoffee from '@/components/BuyMeACoffee';
 import ResultsSlideshow from '@/components/ResultsSlideshow';
+import WinRankings from '@/components/WinRankings';
 
 const QRCode        = dynamic(() => import('react-qr-code'), { ssr: false });
 const BracketDiagram = dynamic(() => import('@/components/BracketDiagram'), { ssr: false });
@@ -426,6 +427,9 @@ export default function HostPage() {
                 <div className="champion-author">— {state.champion.author}</div>
               )}
             </div>
+            {/* Host-only: the popularity table needs the raw voter names, which
+                only the host's response carries. */}
+            <WinRankings bracketHistory={state.bracketHistory} />
             {allLayers.length > 0 && (
               <div className="mt-3">
                 <p className="text-xs text-muted mb-1" style={{ textTransform: 'uppercase', letterSpacing: '0.1em' }}>Full bracket</p>
@@ -433,7 +437,7 @@ export default function HostPage() {
               </div>
             )}
             <button className="btn mt-3" onClick={() => router.push('/')}>↺ New Game</button>
-            <BuyMeACoffee />
+            <BuyMeACoffee fullWidth />
           </>
         )}
       </main>
