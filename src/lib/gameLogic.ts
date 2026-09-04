@@ -15,6 +15,39 @@ function shuffle<T>(arr: T[]): T[] {
   return a;
 }
 
+/**
+ * Lays the shuffled field into round-1 pairs.
+ *
+ * The interleave below is named a "spread", and it does push an author's quotes
+ * toward opposite ends of the bracket - but read what it actually produces
+ * before changing it, because the obvious reading is backwards.
+ *
+ * Quotes are ordered by author, largest group first, then dealt to slots
+ * 0, last, 1, last-1, 2, last-2 ... Pairs are ADJACENT slots - (0,1), (2,3) -
+ * so slots 0 and 1 hold the top author's 1st and 3rd quotes: the same pair.
+ * Any author with three or more quotes therefore meets themselves in round 1,
+ * reliably rather than by chance.
+ *
+ * Measured over 500 games, same-author round-1 matchups per game:
+ *
+ *     field                      this function     plain shuffle
+ *     6 of 14 (one dominant)     2.00              1.20
+ *     4 of 14                    2.00              0.45
+ *     7 of 14 (half the book)    3.00              1.66
+ *     2 of 14                    0.00              0.08
+ *
+ * So this clusters an author 1.7-4x more than random, and only separates when
+ * someone has exactly two quotes.
+ *
+ * THAT IS THE INTENDED BEHAVIOUR (confirmed by the user, 2026-09-04). Two of one
+ * person's quotes knocking each other out early is a balancing choice: it stops
+ * a prolific author occupying half the later rounds. Do not "fix" it toward
+ * separation - removing the interleave would cut early meetings roughly in half.
+ * Raising or lowering the rate is a product decision, not a correctness one.
+ *
+ * `sortAuthor` exists for the grouping here: a conversation quote's display
+ * author is "A, B, C", but it groups under its last speaker.
+ */
 export function buildBracket(quotes: Quote[]): Array<[Quote | null, Quote | null]> {
   const padded: Array<Quote | null> = shuffle(quotes);
   // The BYE slot is chosen below rather than left in the tail position, so
@@ -47,11 +80,13 @@ export function buildBracket(quotes: Quote[]): Array<[Quote | null, Quote | null
   const slots: Array<Quote | null> = new Array(size).fill(null);
   ordered.forEach((q, i) => { slots[spread[i]] = q; });
   // `ordered` holds size-1 quotes when a BYE is needed, so exactly one slot is
-  // still null - and it is whichever spread position went unused, which is the
-  // tail. Move that hole to a random slot, shifting the displaced quote into
-  // the tail, so the BYE is not deterministic. The author spread is otherwise
-  // untouched: one swap cannot bring two of an author's quotes together that
-  // the spread had already separated by more than one position.
+  // still null - and it is whichever interleave position went unused, which is
+  // the tail. Move that hole to a random slot, shifting the displaced quote
+  // into the tail, so the BYE is not deterministic.
+  //
+  // One swap barely moves the author distribution either way: measured, it
+  // leaves same-author round-1 matchups within noise of the even-field figure
+  // (see the header above). It is not doing any separating work.
   if (needsBye) {
     const hole = slots.indexOf(null);
     const target = Math.floor(Math.random() * size);
