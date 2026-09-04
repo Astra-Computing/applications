@@ -1373,3 +1373,10 @@ label { font-size: 0.88rem; color: var(--muted); display: block; margin-bottom: 
   /* The border still ends accent - that is what says the vote landed. */
   .vote-confirm .quote-card { animation: none; border-color: var(--accent); }
 }
+
+/* R30 (U9): the player's end-of-game recap card arrives after the champion has
+   registered, rather than landing with it. */
+.player-recap { animation: enter-rise 0.4s ease-out 0.45s both; }
+@media (prefers-reduced-motion: reduce) {
+  .player-recap { animation: none; opacity: 1; transform: none; }
+}

@@ -446,7 +446,10 @@ function PlayerView() {
               )}
             </div>
 
-            <div className="card mt-3" style={{ padding: '1.25rem' }}>
+            {/* R30: the personal "how I voted vs the room" recap. On the done
+                screen that is this card, not a row list - the rows are the
+                between-rounds recap higher up. */}
+            <div className="card mt-3 player-recap" style={{ padding: '1.25rem' }}>
               <h3 style={{
                 fontFamily: 'var(--font-sans)',
                 fontWeight: 600,
