@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { Quote } from '@/lib/types';
@@ -19,17 +19,40 @@ export default function HostSetupPage() {
   const router = useRouter();
   const fileRef = useRef<HTMLInputElement>(null);
   const [quotes, setQuotes] = useState<Quote[]>([]);
+  // Parsed total, held separately from `quotes` on purpose: a sub-minimum parse
+  // clears `quotes`, so a count derived from it would report 0 for a one-quote
+  // book. The host needs to see that their line WAS read, just not enough of it.
+  const [parsedCount, setParsedCount] = useState<number | null>(null);
+  const [text, setText] = useState('');
   const [fileName, setFileName] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [dragging, setDragging] = useState(false);
   const [tipsOpen, setTipsOpen] = useState(true);
   const [previewOpen, setPreviewOpen] = useState(false);
 
   const hasQuotes = quotes.length >= 2;
 
-  function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  // The single entry point for every input route - typing, pasting, dropping a
+  // file, and picking one. Keeping one function here is what makes the three
+  // routes provably identical rather than three parsers that drift.
+  function ingest(raw: string) {
+    const parsed = parseQuotebook(raw);
+    setParsedCount(parsed.length);
+    if (parsed.length < 2) {
+      setError(parsed.length === 0
+        ? ''
+        : 'Need at least 2 quotes. Check the Tips below for supported formats.');
+      setQuotes([]);
+      return;
+    }
+    setError('');
+    setQuotes(parsed);
+    setTipsOpen(false);
+    setPreviewOpen(true);
+  }
+
+  function readFile(file: File) {
     setFileName(file.name);
     setError('');
     const reader = new FileReader();
@@ -39,24 +62,74 @@ export default function HostSetupPage() {
       setError('Could not read that file. Try selecting it again.');
       setFileName('');
       setQuotes([]);
+      setParsedCount(null);
     };
     reader.onload = ev => {
-      const text = ev.target?.result as string;
-      const parsed = parseQuotebook(text);
-      if (parsed.length < 2) {
-        setError('Need at least 2 quotes. Check the Tips below for supported formats.');
-        setQuotes([]);
-      } else {
-        setQuotes(parsed);
-        setTipsOpen(false);
-        setPreviewOpen(true);
-      }
+      const contents = ev.target?.result as string;
+      setText(contents);
+      ingest(contents);
     };
     reader.readAsText(file);
+  }
+
+  function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    readFile(file);
     // Clear the input so re-picking the same file fires onChange again, which
     // matters precisely when the first attempt failed.
     e.target.value = '';
   }
+
+  function handleText(e: React.ChangeEvent<HTMLTextAreaElement>) {
+    const value = e.target.value;
+    setText(value);
+    setFileName('');
+    ingest(value);
+  }
+
+  // Drag state is counted at the window, not tracked on the box: dragenter and
+  // dragleave fire for every descendant, so a naive handler flickers the
+  // highlight off every time the pointer crosses a child element.
+  useEffect(() => {
+    let depth = 0;
+
+    function onEnter(e: DragEvent) {
+      if (!e.dataTransfer?.types.includes('Files')) return;
+      depth += 1;
+      setDragging(true);
+    }
+    function onLeave(e: DragEvent) {
+      if (!e.dataTransfer?.types.includes('Files')) return;
+      depth = Math.max(0, depth - 1);
+      if (depth === 0) setDragging(false);
+    }
+    // Both of these must preventDefault or the browser navigates away to the
+    // dropped file, discarding everything the host has parsed so far.
+    function onOver(e: DragEvent) {
+      if (!e.dataTransfer?.types.includes('Files')) return;
+      e.preventDefault();
+    }
+    function onDrop(e: DragEvent) {
+      if (!e.dataTransfer?.types.includes('Files')) return;
+      e.preventDefault();
+      depth = 0;
+      setDragging(false);
+      const file = e.dataTransfer.files?.[0];
+      if (file) readFile(file);
+    }
+
+    window.addEventListener('dragenter', onEnter);
+    window.addEventListener('dragleave', onLeave);
+    window.addEventListener('dragover', onOver);
+    window.addEventListener('drop', onDrop);
+    return () => {
+      window.removeEventListener('dragenter', onEnter);
+      window.removeEventListener('dragleave', onLeave);
+      window.removeEventListener('dragover', onOver);
+      window.removeEventListener('drop', onDrop);
+    };
+  }, []);
 
   async function handleCreate() {
     if (!hasQuotes) return;
@@ -87,17 +160,38 @@ export default function HostSetupPage() {
       <hr />
 
       <div className="mt-3">
-        {/* A real <label for> wrapping a focusable (not display:none) input:
-            the previous click-only <div> left the file picker unreachable by
-            keyboard, so a keyboard-only host could not create a game at all. */}
-        <label htmlFor="quotebook">Upload quotebook (.txt)</label>
-        <label className="file-upload mt-1" htmlFor="quotebook">
-          <input id="quotebook" ref={fileRef} type="file" accept=".txt" onChange={handleFile} />
-          {fileName
-            ? <p style={{ color: 'var(--text)' }}>{fileName}</p>
-            : <p className="text-muted">Choose a .txt file</p>
-          }
-        </label>
+        <label htmlFor="quotebook-text">Add your quotebook</label>
+        {/* A plain container, not a <label for>. Wrapping both controls in one
+            label forwards every click on its padding to the file input, so a
+            host clicking the box to type would get an OS file dialog instead of
+            a cursor - and the textarea would inherit no accessible name, since
+            the label's belongs to the input it targets. */}
+        <div className={`file-upload mt-1${dragging ? ' is-dragging' : ''}`}>
+          <textarea
+            id="quotebook-text"
+            className="qb-textarea"
+            value={text}
+            onChange={handleText}
+            placeholder="Paste or type your quotes here — one per line"
+            aria-label="Paste or type your quotebook, one quote per line"
+            spellCheck={false}
+            rows={6}
+          />
+          <div className="qb-upload-row">
+            {/* A real <label for> on a focusable (not display:none) input: the
+                previous click-only <div> left the file picker unreachable by
+                keyboard, so a keyboard-only host could not create a game. */}
+            <label className="qb-file-label" htmlFor="quotebook">
+              <input id="quotebook" ref={fileRef} type="file" accept=".txt" onChange={handleFile} />
+              {fileName ? `📄 ${fileName}` : 'or drop a .txt file — or choose one'}
+            </label>
+            {parsedCount !== null && (
+              <span className="qb-count" aria-live="polite">
+                {parsedCount} {parsedCount === 1 ? 'quote' : 'quotes'} found
+              </span>
+            )}
+          </div>
+        </div>
       </div>
 
       {error && <div className="alert alert-error mt-2">{error}</div>}
@@ -149,7 +243,7 @@ export default function HostSetupPage() {
         </div>
       </details>
 
-      {/* Preview dropdown — inactive until a file is uploaded */}
+      {/* Preview dropdown — inactive until quotes are parsed */}
       <details
         className={`qb-details mt-2${!hasQuotes ? ' qb-details-inactive' : ''}`}
         open={previewOpen}
@@ -169,13 +263,15 @@ export default function HostSetupPage() {
               {quotes.length % 2 === 1 && <span className="text-muted"> (1 BYE will be added)</span>}
             </>
           ) : (
-            'Preview — upload a file first'
+            'Preview — add some quotes first'
           )}
         </summary>
         {hasQuotes && (
           <div className="card qb-details-body">
             {quotes.slice(0, 10).map((q, i) => (
-              <p key={i} className="text-sm" style={{ padding: '0.25rem 0', borderBottom: '1px solid var(--border)' }}>
+              // Keyed on content, not index: with key={i} React reuses the same
+              // nodes across a second parse, so the entrance never replays.
+              <p key={`${q.author}|${q.text}`} className="text-sm qb-preview-row" style={{ ['--stagger-index' as string]: i }}>
                 <em>{previewQuote(q.text, 80)}</em>
                 <span className="text-muted"> — {q.author}</span>
               </p>
@@ -187,15 +283,15 @@ export default function HostSetupPage() {
         )}
       </details>
 
-      {hasQuotes && (
-        <button
-          className={`btn btn-primary btn-full mt-3${loading ? ' waiting-shimmer' : ''}`}
-          onClick={handleCreate}
-          disabled={loading}
-        >
-          {loading ? 'Creating…' : 'Create Game'}
-        </button>
-      )}
+      {/* Always rendered so "disabled" is a real state R5 can describe and a
+          test can assert on. It used to be mounted only when hasQuotes. */}
+      <button
+        className="btn btn-primary btn-full mt-3"
+        onClick={handleCreate}
+        disabled={!hasQuotes || loading}
+      >
+        {loading ? 'Creating…' : 'Create Game'}
+      </button>
     </main>
   );
 }
