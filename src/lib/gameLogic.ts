@@ -82,6 +82,43 @@ export function joinGame(state: GameState, playerName: string, playerToken: stri
   };
 }
 
+/** Canonical storage form for a player name (R3).
+ *
+ *  NFC so two visually identical names cannot both exist as separate keys, and
+ *  internal whitespace runs collapsed so "Jon   Smith" and "Jon Smith" collide
+ *  rather than sitting side by side in the roster.
+ *
+ *  Deliberately does NOT strip zero-width characters, even though the plan's
+ *  wording suggested folding that in here: U+200D ZERO WIDTH JOINER is what
+ *  holds emoji sequences together, so stripping it would break a name like
+ *  a family emoji into separate glyphs. Detection of an invisible name is a
+ *  separate question, answered by hasVisibleCharacter below.
+ */
+export function normalizePlayerName(raw: string): string {
+  return raw.normalize('NFC').replace(/\s+/g, ' ').trim();
+}
+
+/** True when anything remains after removing characters that render as nothing
+ *  (R4). Format characters, zero-width spaces and the BOM are stripped for this
+ *  test only - a name made entirely of them is invisible in the roster and
+ *  unaddressable by the host. */
+export function hasVisibleCharacter(name: string): boolean {
+  // Checked by code point rather than a \p{Cf} class: that needs the `u`
+  // regex flag, which needs an es6+ target, and this tsconfig sets none.
+  for (let i = 0; i < name.length; i++) {
+    const c = name.charCodeAt(i);
+    if (c === 0x20 || (c >= 0x09 && c <= 0x0d)) continue;   // whitespace
+    if (c === 0x00ad || c === 0x180e) continue;             // soft hyphen, MVS
+    if (c >= 0x200b && c <= 0x200f) continue;               // zero-width, bidi marks
+    if (c >= 0x202a && c <= 0x202e) continue;               // bidi embedding
+    if (c >= 0x2060 && c <= 0x2064) continue;               // word joiner, invisible ops
+    if (c >= 0x2066 && c <= 0x2069) continue;               // bidi isolates
+    if (c === 0xfeff) continue;                             // BOM / ZWNBSP
+    return true;
+  }
+  return false;
+}
+
 // Resolves a player token back to the name it was issued to, or null when the
 // token belongs to nobody in this room.
 //
@@ -101,6 +138,31 @@ export function playerNameForToken(state: GameState, token: string | null | unde
   return null;
 }
 
+/** Removes a player from the roster, banking their token so the poll route can
+ *  tell them what happened rather than silently demoting them to a spectator.
+ *
+ *  Votes are deliberately left in place (R10): the round already happened, and
+ *  rewriting its recorded counts because someone left afterwards would make the
+ *  standings disagree with what the room actually saw.
+ *
+ *  An unknown name returns the state unchanged, so no write occurs. The lookup
+ *  is an own-property check - a player named `toString` must not resolve to a
+ *  function inherited from Object.prototype.
+ */
+export function kickPlayer(state: GameState, playerName: string): GameState {
+  if (!Object.prototype.hasOwnProperty.call(state.playerTokens, playerName)) return state;
+  const token = state.playerTokens[playerName];
+  const participants = { ...state.participants };
+  const playerTokens = { ...state.playerTokens };
+  delete participants[playerName];
+  delete playerTokens[playerName];
+  return {
+    ...state,
+    participants,
+    playerTokens,
+    removedTokens: [...(state.removedTokens ?? []), token],
+  };
+}
 // Updates heartbeat timestamp without touching playerTokens
 export function refreshHeartbeat(state: GameState, playerName: string): GameState {
   if (!(playerName in state.participants)) return state;

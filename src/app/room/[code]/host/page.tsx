@@ -39,6 +39,13 @@ export default function HostPage() {
   // state flag: the effect closes over a stale value and would read false
   // during an in-flight request, firing the same action twice.
   const autoFiredRef = useRef('');
+  // Kick state is deliberately separate from `acting` / `actionError`: the
+  // round-header button reads those for its label and disabled state, so
+  // routing a kick through them would flip it to "Resolving..." while no round
+  // is resolving.
+  const [kickTarget, setKickTarget] = useState<string | null>(null);
+  const [kicking, setKicking] = useState(false);
+  const [kickError, setKickError] = useState('');
   // The round the host is currently being shown a recap of, captured from the
   // /advance response. Host-only and client-only: players never see it, and a
   // reload during `results` lands straight on the bracket.
@@ -123,16 +130,17 @@ export default function HostPage() {
   // back to the controls, so without a keyboard dismissal a viewport that
   // clipped the button left them stuck.
   useEffect(() => {
-    if (!showTutorial && !showEndConfirm && !showQr) return;
+    if (!showTutorial && !showEndConfirm && !showQr && !kickTarget) return;
     function onKey(e: KeyboardEvent) {
       if (e.key !== 'Escape') return;
       setShowTutorial(false);
       setShowEndConfirm(false);
       setShowQr(false);
+      setKickTarget(null);
     }
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [showTutorial, showEndConfirm, showQr]);
+  }, [showTutorial, showEndConfirm, showQr, kickTarget]);
 
   // The poll replaces `state` with a fresh object every 2s, so anything derived
   // from it is referentially new each tick and BracketDiagram re-diffs its whole
@@ -201,6 +209,25 @@ export default function HostPage() {
       if (!skipTutorial) setShowTutorial(true);
     } finally {
       setActing(false);
+    }
+  }
+
+  async function handleKick(name: string) {
+    setKicking(true);
+    try {
+      const res = await fetch(`/api/game/${code}/kick`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(hostToken ? { 'x-host-token': hostToken } : {}) },
+        body: JSON.stringify({ name }),
+      });
+      if (!res.ok) { setKickError(describeFailure(res)); return; }
+      setKickError('');
+      setKickTarget(null);
+      // The next poll (within 2s) drops them from the roster; no local edit.
+    } catch {
+      setKickError('Could not remove that player. Try again.');
+    } finally {
+      setKicking(false);
     }
   }
 
@@ -400,7 +427,17 @@ export default function HostPage() {
             <div className="chip-list">
               {/* Keyed on the name, so an existing chip does not replay its
                   entrance on every 2s poll tick. */}
-              {participants.map(p => <span key={p} className="chip m-pop">{p}</span>)}
+              {participants.map(p => (
+                <button
+                  key={p}
+                  type="button"
+                  className="chip chip-kick m-pop"
+                  onClick={() => { setKickError(''); setKickTarget(p); }}
+                  aria-label={`Remove ${p} from the game`}
+                >
+                  {p}
+                </button>
+              ))}
               {participants.length === 0 && (
                 <span className="text-xs waiting-shimmer" style={{ display: 'inline-block' }}>
                   No one's here yet — share the code!
@@ -559,6 +596,36 @@ export default function HostPage() {
       {/* ── Round-results recap (host only, client only) ── */}
       {slideshowRound && (
         <ResultsSlideshow round={slideshowRound} onFinish={() => setSlideshowRound(null)} />
+      )}
+
+      {/* ── Remove-player confirmation (R7) ── */}
+      {kickTarget && (
+        <div className="overlay" role="dialog" aria-modal="true">
+          <div className="card overlay-card">
+            <h3 style={{ fontFamily: 'var(--font-sans)', fontWeight: 600, fontSize: '1rem', marginBottom: '0.75rem' }}>
+              Remove {kickTarget}?
+            </h3>
+            <p className="text-sm text-muted">
+              They will be told the host removed them, and can join again with the room code.
+              Votes they have already cast stay counted.
+            </p>
+            {kickError && <div className="alert alert-error mt-2">{kickError}</div>}
+            {/* Not .btn-danger: a kick is a nudge, not the irreversible
+                deletion End Game warns about. */}
+            <div className="flex-row mt-3">
+              <button
+                className={`btn btn-primary${kicking ? ' waiting-shimmer' : ''}`}
+                onClick={() => handleKick(kickTarget)}
+                disabled={kicking}
+              >
+                {kicking ? 'Removing…' : 'Remove'}
+              </button>
+              <button className="btn" onClick={() => setKickTarget(null)} disabled={kicking}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* ── Enlarged QR overlay (R17) ── */}

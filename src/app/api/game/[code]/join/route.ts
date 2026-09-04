@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { loadAndUpdate, isValidCode } from '@/lib/gameState';
-import { joinGame, PLAYER_TIMEOUT_MS } from '@/lib/gameLogic';
+import { joinGame, PLAYER_TIMEOUT_MS, normalizePlayerName, hasVisibleCharacter } from '@/lib/gameLogic';
 
 export const runtime = 'nodejs';
 
@@ -21,7 +21,14 @@ export async function POST(req: NextRequest, { params }: { params: { code: strin
   if (typeof name !== 'string' || !name.trim()) {
     return NextResponse.json({ error: 'Name required' }, { status: 400 });
   }
-  const trimName = name.trim();
+  // Canonical form before any lookup (R3), so two names that differ only in
+  // whitespace runs or Unicode composition cannot both hold a seat.
+  const trimName = normalizePlayerName(name);
+  // A name of only zero-width or formatting characters renders as nothing: it
+  // is invisible in the roster and the host cannot address it (R4).
+  if (!hasVisibleCharacter(trimName)) {
+    return NextResponse.json({ error: 'Please use a name with at least one visible character.' }, { status: 400 });
+  }
   // Player names are object keys inside the single encrypted state row, which
   // is decrypted and re-encrypted on every action. /create caps its input;
   // without the same caps here an unbounded name (or an unbounded number of
@@ -36,7 +43,9 @@ export async function POST(req: NextRequest, { params }: { params: { code: strin
   let roomFull = false;
 
   const state = await loadAndUpdate(code, s => {
-    const storedToken = s.playerTokens[trimName];
+    const storedToken = Object.prototype.hasOwnProperty.call(s.playerTokens, trimName)
+      ? s.playerTokens[trimName]
+      : undefined;
 
     if (storedToken) {
       if (token && token === storedToken) {
@@ -45,7 +54,9 @@ export async function POST(req: NextRequest, { params }: { params: { code: strin
         return { ...s, participants: { ...s.participants, [trimName]: Date.now() } };
       }
       // Name is held by someone else — block if they're still active
-      const lastSeen = s.participants[trimName] ?? 0;
+      const lastSeen = Object.prototype.hasOwnProperty.call(s.participants, trimName)
+        ? s.participants[trimName]
+        : 0;
       if (Date.now() - lastSeen < PLAYER_TIMEOUT_MS) {
         nameTaken = true;
         return s;

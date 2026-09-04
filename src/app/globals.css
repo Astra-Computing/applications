@@ -1444,3 +1444,16 @@ label { font-size: 0.88rem; color: var(--muted); display: block; margin-bottom: 
   accent-color: var(--accent);
   cursor: pointer;
 }
+
+/* ── Removable roster chip (R7, U3) ──
+   A real <button>, so the roster is operable by keyboard. It has to read as
+   activatable rather than informational, without shouting - removing someone
+   is a nudge, not a destructive action. */
+.chip-kick {
+  font: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+.chip-kick:hover { border-color: var(--accent); color: var(--text); }
+.chip-kick:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

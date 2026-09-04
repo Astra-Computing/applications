@@ -27,6 +27,14 @@ export async function GET(req: NextRequest, { params }: { params: { code: string
     return NextResponse.json(sanitizeForPlayer(state, playerName));
   }
 
+  // A token the host removed: tell that client what happened, with a
+  // machine-readable reason so the page can distinguish this from an expired
+  // or unrelated token. Every OTHER unmatched token keeps today's spectator
+  // behaviour - a stale token from a different room must not read as a kick.
+  if (playerToken && (state.removedTokens ?? []).indexOf(playerToken) !== -1) {
+    return NextResponse.json({ error: 'Removed by host', reason: 'removed' }, { status: 403 });
+  }
+
   // Unauthenticated / spectator: sanitised state, no myVote
   return NextResponse.json(sanitizeForPlayer(state, null));
 }

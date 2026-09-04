@@ -99,6 +99,9 @@ function PlayerView() {
   // `error` is fatal and replaces the page; `stale` is a recoverable
   // connectivity blip shown as a banner over the last-known board.
   const [error, setError]             = useState('');
+  // Removed by the host: its own state rather than a reuse of `error`, because
+  // it needs a different screen and a route back to joining.
+  const [removed, setRemoved]         = useState(false);
   const [stale, setStale]             = useState(false);
   const [voteError, setVoteError]     = useState('');
   const [voting, setVoting]           = useState<Record<number, boolean>>({});
@@ -161,6 +164,15 @@ function PlayerView() {
           if (startedAt >= lastMutationRef.current) setState(next);
         } else if (res.status === 404) {
           setError('Room not found.');
+        } else if (res.status === 403) {
+          // Removed by the host (R8). Fatal: clear this room's stored session
+          // so a reload lands on the join screen rather than looping on 403.
+          const body = await res.json().catch(() => null);
+          if (body?.reason === 'removed') {
+            localStorage.removeItem(`uq_session_${code}`);
+            sessionStorage.removeItem(`uq_session_${code}`);
+            setRemoved(true);
+          }
         } else if (++failCountRef.current >= 3) {
           setStale(true);
         }
@@ -274,6 +286,19 @@ function PlayerView() {
       setVoting(v => ({ ...v, [matchupIndex]: false }));
     }
   }
+
+  if (removed) return (
+    <main className="page">
+      <div className="alert alert-info">The host removed you from this game.</div>
+      <p className="text-sm text-muted mt-2">
+        You can join again with the room code if the host is happy for you to.
+      </p>
+      <button className="btn btn-primary mt-3" onClick={() => router.replace(`/join?code=${code}`)}>
+        Join again
+      </button>
+      <button className="btn mt-1" onClick={() => router.replace('/')}>Go Home</button>
+    </main>
+  );
 
   if (error) return (
     <main className="page">
