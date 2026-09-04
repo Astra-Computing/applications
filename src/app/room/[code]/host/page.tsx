@@ -667,7 +667,7 @@ export default function HostPage() {
             <p style={{ marginBottom: '1.5rem', lineHeight: 1.7 }}>
               In each round of the bracket, select your favorite from each of the matches provided.
               When you are done, submit your votes! The most popular of each match moves on to the
-              next round untill we declare a winner.
+              next round until we declare a winner.
             </p>
             <hr style={{ marginBottom: '1rem' }} />
             <p className="text-xs text-muted" style={{ lineHeight: 1.6, marginBottom: '1.5rem' }}>

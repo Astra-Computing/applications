@@ -206,7 +206,7 @@ export default function HostSetupPage() {
                 keyboard, so a keyboard-only host could not create a game. */}
             <label className="qb-file-label" htmlFor="quotebook">
               <input id="quotebook" ref={fileRef} type="file" accept=".txt" onChange={handleFile} />
-              {fileName ? `📄 ${fileName}` : 'or drop a .txt file — or choose one'}
+              {fileName ? `📄 ${fileName}` : 'Or drop a .txt file here, or choose one'}
             </label>
             {parsedCount !== null && (
               <span className="qb-count" aria-live="polite">

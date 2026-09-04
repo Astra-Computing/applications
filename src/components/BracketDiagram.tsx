@@ -2,7 +2,7 @@
 
 import { memo, useRef, useEffect } from 'react';
 import { prefersReducedMotion } from '@/lib/useAnimatedNumber';
-import { Matchup } from '@/lib/types';
+import { Matchup, Quote } from '@/lib/types';
 import { truncate, getVoteCounts } from '@/lib/gameLogic';
 
 interface Props {
@@ -65,18 +65,45 @@ function BracketDiagram({ rounds, currentRound, revealed = true }: Props) {
   // first-round spacing intact and producing a straight horizontal connector.
   // Built row-by-row so chained BYEs inherit the already-adjusted Y rather
   // than the formula default (which would place them progressively too low).
+  // Which matchups in round r feed each matchup in round r+1.
+  //
+  // This used to be `Math.floor(mIdx / 2)`, which assumed winners carry forward
+  // in order and that a lone BYE feeder is always the last box. Neither holds
+  // now that the BYE is chosen at random, so each winner is located in the next
+  // round by identity instead.
+  const quoteKey = (q: Quote) => `${q.author}|${q.text}`;
+  const feeders: number[][][] = rounds.map(() => []);
+  for (let rIdx = 0; rIdx < rounds.length - 1; rIdx++) {
+    const nextRound = rounds[rIdx + 1];
+    const indexOfQuote = new Map<string, number>();
+    nextRound.forEach((m, i) => {
+      if (m.a) indexOfQuote.set(quoteKey(m.a), i);
+      if (m.b) indexOfQuote.set(quoteKey(m.b), i);
+    });
+    feeders[rIdx + 1] = nextRound.map(() => []);
+    rounds[rIdx].forEach((m, mIdx) => {
+      const won = m.winner ? m[m.winner] : null;
+      if (!won) return;
+      const target = indexOfQuote.get(quoteKey(won));
+      if (target !== undefined) feeders[rIdx + 1][target].push(mIdx);
+    });
+  }
+
+  // A matchup sits at the mean of the boxes feeding it. For an ordinary pair
+  // that is exactly the old formula; for a lone feeder it puts the box level
+  // with its one source, which is the straight connector the special case above
+  // was hand-computing. Unresolved rounds have no feeders and keep the formula.
   const cyGrid: number[][] = [];
   for (let rIdx = 0; rIdx < rounds.length; rIdx++) {
     const row: number[] = [];
     for (let mIdx = 0; mIdx < rounds[rIdx].length; mIdx++) {
-      if (rIdx > 0) {
-        const loneFeederIdx = 2 * mIdx;
-        if (rounds[rIdx - 1].length === loneFeederIdx + 1) {
-          row.push(cyGrid[rIdx - 1][loneFeederIdx]);
-          continue;
-        }
+      const from = rIdx > 0 ? (feeders[rIdx][mIdx] ?? []) : [];
+      if (from.length > 0) {
+        const sum = from.reduce((acc, f) => acc + cyGrid[rIdx - 1][f], 0);
+        row.push(sum / from.length);
+      } else {
+        row.push(matchupCenterY(mIdx, rIdx, firstRoundCount));
       }
-      row.push(matchupCenterY(mIdx, rIdx, firstRoundCount));
     }
     cyGrid.push(row);
   }
@@ -173,15 +200,21 @@ function BracketDiagram({ rounds, currentRound, revealed = true }: Props) {
         </g>
       );
 
-      // Connector lines to next round
+      // Connector lines to the next round.
+      //
+      // Drawn once per NEXT-round box rather than once per pair of current
+      // boxes: with a randomised BYE a box can have one feeder or two, and
+      // those feeders are no longer guaranteed to be adjacent.
       if (rIdx < rounds.length - 1) {
-        const nextRound = rounds[rIdx + 1];
-        const nextMIdx = Math.floor(mIdx / 2);
-        if (nextMIdx < nextRound.length) {
-          const nextCy = cyGrid[rIdx + 1][nextMIdx];
-          const midX = x + BOX_W + ROUND_GAP / 2;
+        const midX = x + BOX_W + ROUND_GAP / 2;
+        const nextX = PAD_X + (rIdx + 1) * ROUND_STEP;
 
-          // Horizontal from this box's right edge to midX
+        rounds[rIdx + 1].forEach((_next, nextMIdx) => {
+          const from = feeders[rIdx + 1][nextMIdx] ?? [];
+          if (from.indexOf(mIdx) === -1) return;
+          const nextCy = cyGrid[rIdx + 1][nextMIdx];
+
+          // This box out to the shared vertical.
           lines.push(
             <line key={`line-h-${rIdx}-${mIdx}`}
               x1={x + BOX_W} y1={cy} x2={midX} y2={cy}
@@ -189,28 +222,25 @@ function BracketDiagram({ rounds, currentRound, revealed = true }: Props) {
             />
           );
 
-          // Vertical at midX — only for paired matchups; lone feeders are already at nextCy
-          if (mIdx % 2 === 0 && mIdx + 1 < round.length) {
-            const siblingCy = cyGrid[rIdx][mIdx + 1];
+          // The vertical and the run into the next box belong to the target,
+          // not to either feeder, so only the first feeder draws them.
+          if (from[0] !== mIdx) return;
+          if (from.length > 1) {
+            const ys = from.map(f => cyGrid[rIdx][f]);
             lines.push(
-              <line key={`line-v-${rIdx}-${mIdx}`}
-                x1={midX} y1={cy} x2={midX} y2={siblingCy}
+              <line key={`line-v-${rIdx}-${nextMIdx}`}
+                x1={midX} y1={Math.min(...ys)} x2={midX} y2={Math.max(...ys)}
                 stroke="var(--border)" strokeWidth={1.5}
               />
             );
           }
-
-          // Horizontal from midX to next box's left edge (once per pair, on even index)
-          if (mIdx % 2 === 0) {
-            const nextX = PAD_X + (rIdx + 1) * ROUND_STEP;
-            lines.push(
-              <line key={`line-h2-${rIdx}-${mIdx}`}
-                x1={midX} y1={nextCy} x2={nextX} y2={nextCy}
-                stroke="var(--border)" strokeWidth={1.5}
-              />
-            );
-          }
-        }
+          lines.push(
+            <line key={`line-h2-${rIdx}-${nextMIdx}`}
+              x1={midX} y1={nextCy} x2={nextX} y2={nextCy}
+              stroke="var(--border)" strokeWidth={1.5}
+            />
+          );
+        });
       }
     });
   });

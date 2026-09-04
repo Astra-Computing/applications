@@ -140,7 +140,7 @@ export default function WinRankings({ bracketHistory }: Props) {
       <Panel
         className="win-panel"
         title="Author standings"
-        subtitle="How far each author's best quote got"
+        subtitle="How far the author's best quote got"
         empty={authors.length === 0}
       >
         {authors.map((a, i) => (
@@ -161,7 +161,7 @@ export default function WinRankings({ bracketHistory }: Props) {
       <Panel
         className="win-panel win-panel-second"
         title="Player standings"
-        subtitle="How often each player voted with the room"
+        subtitle="How often the player voted with the majority"
         empty={players.length === 0}
       >
         {players.map((p, i) => (

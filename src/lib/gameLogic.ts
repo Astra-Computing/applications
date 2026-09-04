@@ -17,7 +17,10 @@ function shuffle<T>(arr: T[]): T[] {
 
 export function buildBracket(quotes: Quote[]): Array<[Quote | null, Quote | null]> {
   const padded: Array<Quote | null> = shuffle(quotes);
-  if (padded.length % 2 === 1) padded.push(null);
+  // The BYE slot is chosen below rather than left in the tail position, so
+  // round 1's BYE is not always the same seed (R15).
+  const needsBye = padded.length % 2 === 1;
+  if (needsBye) padded.push(null);
 
   const size = padded.length;
 
@@ -43,6 +46,20 @@ export function buildBracket(quotes: Quote[]): Array<[Quote | null, Quote | null
 
   const slots: Array<Quote | null> = new Array(size).fill(null);
   ordered.forEach((q, i) => { slots[spread[i]] = q; });
+  // `ordered` holds size-1 quotes when a BYE is needed, so exactly one slot is
+  // still null - and it is whichever spread position went unused, which is the
+  // tail. Move that hole to a random slot, shifting the displaced quote into
+  // the tail, so the BYE is not deterministic. The author spread is otherwise
+  // untouched: one swap cannot bring two of an author's quotes together that
+  // the spread had already separated by more than one position.
+  if (needsBye) {
+    const hole = slots.indexOf(null);
+    const target = Math.floor(Math.random() * size);
+    if (target !== hole) {
+      slots[hole] = slots[target];
+      slots[target] = null;
+    }
+  }
 
   const pairs: Array<[Quote | null, Quote | null]> = [];
   for (let i = 0; i < size; i += 2) pairs.push([slots[i], slots[i + 1]]);
@@ -248,11 +265,45 @@ export function advanceRound(state: GameState): GameState {
     return { ...state, status: 'done', champion: winners[0], bracketHistory: newHistory, matchups: [] };
   }
 
+  // An odd field needs a BYE. Choose the recipient at random rather than
+  // always taking the tail winner (R15), and never give it to whoever had it
+  // in the round just resolved (R16). That round is `resolved` - the entry
+  // appended above - not the last entry of state.bracketHistory, which is the
+  // round before it.
+  //
+  // The choice is restricted to EVEN positions among the winners, and that is
+  // a layout constraint rather than a cosmetic one. BracketDiagram places each
+  // box at the mean of the boxes feeding it, so a solo BYE box sitting between
+  // two paired feeders lands on top of them - 905 overlapping boxes per 1000
+  // games when the BYE was simply appended to the end. Pairing stays over
+  // adjacent winners, with the BYE solo on an even boundary, which keeps the
+  // feeder sets nested and the column monotonic.
+  let ordered = winners;
+  if (winners.length % 2 === 1) {
+    const prevBye = resolved.find(m => m.a === null || m.b === null);
+    const prevByeText = prevBye ? (prevBye.a ?? prevBye.b)!.text : null;
+    const candidates: number[] = [];
+    for (let i = 0; i < winners.length; i += 2) {
+      if (winners[i].text !== prevByeText) candidates.push(i);
+    }
+    // A round can need a BYE without the previous one having had one (a
+    // 12-quote field goes 6 -> 3), so the exclusion often removes nothing. The
+    // field is at least three whenever a BYE is needed, so there are always at
+    // least two even positions and excluding one still leaves a candidate.
+    const pool = candidates.length > 0 ? candidates : [0];
+    const byeIdx = pool[Math.floor(Math.random() * pool.length)];
+    ordered = [
+      ...winners.slice(0, byeIdx),
+      winners[byeIdx],
+      null as unknown as Quote,
+      ...winners.slice(byeIdx + 1),
+    ];
+  }
   const nextMatchups: Matchup[] = [];
-  for (let i = 0; i < winners.length; i += 2) {
+  for (let i = 0; i < ordered.length; i += 2) {
     nextMatchups.push({
-      a: winners[i] ?? null,
-      b: winners[i + 1] ?? null,
+      a: ordered[i] ?? null,
+      b: ordered[i + 1] ?? null,
       votes: { a: [], b: [] },
       winner: null,
     });
