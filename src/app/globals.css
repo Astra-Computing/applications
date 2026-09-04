@@ -1275,3 +1275,101 @@ label { font-size: 0.88rem; color: var(--muted); display: block; margin-bottom: 
   .bracket-enter { animation: none; opacity: 1; transform: none; }
   .bracket-active { animation: none; }
 }
+
+/* ── Champion choreography (R24-R26, U8) ──
+   One timeline, not three animations racing. Everything below is a delay from
+   the same mount, so the card lands, the name follows a beat later, and only
+   then do the standings arrive. All of it is held until the slideshow finishes
+   - the host page does not mount this screen's motion before then. */
+.win-card { animation: champion-in 0.55s cubic-bezier(0.2, 0.9, 0.3, 1.2) both; }
+.win-quote { animation: enter-fade 0.5s ease-out 0.18s both; }
+/* The held beat before the name. This is the reveal. */
+.win-author { animation: enter-rise 0.5s ease-out 0.6s both; }
+
+.win-panel { animation: enter-rise 0.45s ease-out 0.85s both; }
+.win-panel-second { animation-delay: 1s; }
+.win-row {
+  animation: enter-rise 0.3s ease-out both;
+  animation-delay: calc(1.05s + var(--stagger-index, 0) * 40ms);
+}
+/* Bars fill only after their panel has arrived, top row first. */
+.win-bar {
+  width: 0;
+  animation: bar-fill 0.6s ease-out both;
+  animation-delay: calc(1.35s + var(--stagger-index, 0) * 40ms);
+}
+
+@keyframes champion-in {
+  from { opacity: 0; transform: scale(0.9); box-shadow: none; }
+  60%  { box-shadow: 0 0 42px rgba(240, 192, 96, 0.28); }
+  to   { opacity: 1; transform: scale(1); box-shadow: 0 0 0 rgba(240, 192, 96, 0); }
+}
+@keyframes bar-fill {
+  from { width: 0; }
+  to   { width: var(--bar-width, 0%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .win-card,
+  .win-quote,
+  .win-author,
+  .win-panel,
+  .win-row {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+  /* The bar still has to end at its value - that value is the content. */
+  .win-bar { animation: none; width: var(--bar-width, 0%); }
+}
+
+/* ── Player stage motion (R27-R30, U9) ──
+   Restrained on purpose: the phone is a controller, not the stage. Transitions
+   only, plus one acknowledgement. */
+
+/* R29: the pair arrives from the right, and leaves to the left once the vote is
+   confirmed. Both halves live in the hold window the vote handler opens. */
+.matchup-enter { animation: matchup-in 0.25s ease-out both; }
+.matchup-enter.is-leaving { animation: matchup-out 0.2s ease-in both; }
+@keyframes matchup-in {
+  from { opacity: 0; transform: translateX(18px); }
+  to   { opacity: 1; transform: none; }
+}
+@keyframes matchup-out {
+  from { opacity: 1; transform: none; }
+  to   { opacity: 0; transform: translateX(-18px); }
+}
+
+/* R28: the chosen card acknowledges the vote - only after the server accepted
+   it. A rejected vote never reaches this class. */
+.vote-confirm .quote-card {
+  animation: vote-confirmed 0.34s ease-out;
+  border-color: var(--accent);
+}
+@keyframes vote-confirmed {
+  0%   { border-color: var(--border); box-shadow: none; }
+  40%  { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(79, 142, 247, 0.28); }
+  100% { border-color: var(--accent); box-shadow: none; }
+}
+
+/* R27: phases give way to one another rather than snapping. */
+.stage-fade { animation: enter-fade 0.2s ease-out both; }
+
+/* R30: the personal recap builds a line at a time. */
+.recap-row {
+  animation: enter-rise 0.3s ease-out both;
+  animation-delay: calc(var(--stagger-index, 0) * 45ms);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .matchup-enter,
+  .matchup-enter.is-leaving,
+  .stage-fade,
+  .recap-row {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+  /* The border still ends accent - that is what says the vote landed. */
+  .vote-confirm .quote-card { animation: none; border-color: var(--accent); }
+}

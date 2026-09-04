@@ -117,11 +117,11 @@ export function computePlayerRanks(bracketHistory: Matchup[][]): PlayerRow[] {
     .sort((x, y) => y.rate - x.rate || y.decided - x.decided || x.name.localeCompare(y.name));
 }
 
-function Panel({ title, subtitle, empty, children }: {
-  title: string; subtitle: string; empty: boolean; children: React.ReactNode;
+function Panel({ title, subtitle, empty, className, children }: {
+  title: string; subtitle: string; empty: boolean; className?: string; children: React.ReactNode;
 }) {
   return (
-    <div className="rank-panel">
+    <div className={`rank-panel${className ? ` ${className}` : ''}`}>
       <p className="rank-title">{title}</p>
       <p className="rank-sub">{subtitle}</p>
       {empty
@@ -138,12 +138,17 @@ export default function WinRankings({ bracketHistory }: Props) {
   return (
     <div className="rank-split mt-3">
       <Panel
+        className="win-panel"
         title="Author standings"
         subtitle="How far each author's best quote got"
         empty={authors.length === 0}
       >
         {authors.map((a, i) => (
-          <li key={a.author} className={`rank-row${i === 0 ? ' rank-row-top' : ''}`}>
+          <li
+            key={a.author}
+            className={`rank-row win-row${i === 0 ? ' rank-row-top' : ''}`}
+            style={{ ['--stagger-index' as string]: i }}
+          >
             <span className="rank-pos">{i + 1}</span>
             <span className="rank-name">{a.author}</span>
             <span className="rank-note">
@@ -154,17 +159,28 @@ export default function WinRankings({ bracketHistory }: Props) {
       </Panel>
 
       <Panel
+        className="win-panel win-panel-second"
         title="Player standings"
         subtitle="How often each player voted with the room"
         empty={players.length === 0}
       >
         {players.map((p, i) => (
-          <li key={p.name} className={`rank-row${i === 0 ? ' rank-row-top' : ''}`}>
+          <li
+            key={p.name}
+            className={`rank-row win-row${i === 0 ? ' rank-row-top' : ''}`}
+            style={{ ['--stagger-index' as string]: i }}
+          >
             <span className="rank-pos">{i + 1}</span>
             <span className="rank-name">{p.name}</span>
             {/* The bar is decorative; the number beside it carries the value. */}
             <span className="rank-bar" aria-hidden="true">
-              <span className="rank-bar-fill" style={{ width: `${(p.rate * 100).toFixed(1)}%` }} />
+              <span
+                className="rank-bar-fill win-bar"
+                style={{
+                  ['--bar-width' as string]: `${(p.rate * 100).toFixed(1)}%`,
+                  ['--stagger-index' as string]: i,
+                }}
+              />
             </span>
             <span className="rank-note">
               {Math.round(p.rate * 100)}%

@@ -10,6 +10,8 @@ import BuyMeACoffee from '@/components/BuyMeACoffee';
 
 const Confetti = dynamic(() => import('@/components/Confetti'), { ssr: false });
 
+/** How long the board holds on the just-voted matchup before advancing. */
+const CONFIRM_HOLD_MS = 200;
 const HEARTBEAT_MS = 8000;
 
 // ── SVG pie chart helpers ───────────────────────────────────────────────────
@@ -89,6 +91,11 @@ function PlayerView() {
   const [name, setName]               = useState('');
   const [playerToken, setPlayerToken] = useState('');
   const [state, setState]             = useState<GameStatePublic | null>(null);
+  // R28/R29 (KTD10): the matchup the player just voted on, held briefly before
+  // the board advances. Without this the chosen card unmounts in the same commit
+  // that records the server's OK, so the confirmation has nothing to play on.
+  const [confirming, setConfirming] = useState<{ i: number; choice: 'a' | 'b' } | null>(null);
+  const holdRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // `error` is fatal and replaces the page; `stale` is a recoverable
   // connectivity blip shown as a banner over the last-known board.
   const [error, setError]             = useState('');
@@ -191,6 +198,7 @@ function PlayerView() {
       cancelled = true;
       if (pollRef.current) clearInterval(pollRef.current);
       if (heartbeatRef.current) clearInterval(heartbeatRef.current);
+      if (holdRef.current) clearTimeout(holdRef.current);
       document.removeEventListener('visibilitychange', onVisible);
     };
   }, [code, name, playerToken]);
@@ -238,19 +246,28 @@ function PlayerView() {
       }
       setVoteError('');
       lastMutationRef.current = Date.now();
-      // Optimistic local update so the next matchup appears immediately,
-      // instead of waiting on the next poll.
-      setState(prev => {
-        if (!prev) return prev;
-        const matchups = prev.matchups.map((m, i) => {
-          if (i !== matchupIndex) return m;
-          const votes = { ...m.votes };
-          if (m.myVote) votes[m.myVote] = Math.max(0, votes[m.myVote] - 1);
-          votes[choice] += 1;
-          return { ...m, myVote: choice, votes };
+      // The advance is optimistic but no longer instant: the board holds for
+      // CONFIRM_HOLD_MS so the chosen card can acknowledge the vote and leave.
+      // The cost is that the next matchup arrives a beat later, which reads as
+      // confirmation rather than lag.
+      setConfirming({ i: matchupIndex, choice });
+      if (holdRef.current) clearTimeout(holdRef.current);
+      holdRef.current = setTimeout(() => {
+        lastMutationRef.current = Date.now();
+        setState(prev => {
+          if (!prev) return prev;
+          const matchups = prev.matchups.map((m, i) => {
+            if (i !== matchupIndex) return m;
+            const votes = { ...m.votes };
+            if (m.myVote) votes[m.myVote] = Math.max(0, votes[m.myVote] - 1);
+            votes[choice] += 1;
+            return { ...m, myVote: choice, votes };
+          });
+          return { ...prev, matchups };
         });
-        return { ...prev, matchups };
-      });
+        setConfirming(null);
+        holdRef.current = null;
+      }, CONFIRM_HOLD_MS);
     } catch {
       setVoteError('Vote did not go through. Try again.');
     } finally {
@@ -299,6 +316,10 @@ function PlayerView() {
       </div>
       <hr />
 
+      {/* R27: keyed on status, so the stage cross-fades when the phase changes
+          and stays put across the 2s poll. */}
+      <div key={state.status} className="stage-fade">
+
       {/* Lobby */}
       {state.status === 'lobby' && (
         <div className="text-center" style={{ padding: '3rem 0' }}>
@@ -329,11 +350,16 @@ function PlayerView() {
             <p className="text-xs text-muted mb-2">Quotes are anonymous. Vote for whichever speaks to you.</p>
 
             {current ? (
-              <div key={current.i} className="matchup-enter player-matchup">
+              <div
+                key={current.i}
+                className={`matchup-enter player-matchup${confirming?.i === current.i ? ' is-leaving' : ''}`}
+              >
                 <p className="match-header">Matchup {voteCount + 1} of {indexed.length}</p>
                 <div className="grid-3">
                   <div className="flex-col" style={{ gap: '0.5rem' }}>
-                    <QuoteCard quote={current.m.a!} />
+                    <div className={confirming?.i === current.i && confirming.choice === 'a' ? 'vote-confirm' : undefined}>
+                      <QuoteCard quote={current.m.a!} />
+                    </div>
                     <button
                       className={`btn btn-full${voting[current.i] ? ' waiting-shimmer' : ''}`}
                       onClick={() => vote(current.i, 'a')}
@@ -346,7 +372,9 @@ function PlayerView() {
                   <div className="vs-label">vs</div>
 
                   <div className="flex-col" style={{ gap: '0.5rem' }}>
-                    <QuoteCard quote={current.m.b!} />
+                    <div className={confirming?.i === current.i && confirming.choice === 'b' ? 'vote-confirm' : undefined}>
+                      <QuoteCard quote={current.m.b!} />
+                    </div>
                     <button
                       className={`btn btn-full${voting[current.i] ? ' waiting-shimmer' : ''}`}
                       onClick={() => vote(current.i, 'b')}
@@ -383,7 +411,7 @@ function PlayerView() {
                 const votes = ws === 'a' ? m.votes.a : m.votes.b;
                 const lost  = ws === 'a' ? m.votes.b : m.votes.a;
                 return (
-                  <p key={i} className="text-sm" style={{ padding: '0.25rem 0', borderBottom: '1px solid var(--border)' }}>
+                  <p key={i} className="text-sm recap-row" style={{ padding: '0.25rem 0', borderBottom: '1px solid var(--border)', ['--stagger-index' as string]: i }}>
                     ✓ <em>"{truncate(w.text, 70)}"</em>
                     <span className="text-muted"> {votes}–{lost}</span>
                   </p>
@@ -436,6 +464,7 @@ function PlayerView() {
           </>
         );
       })()}
+      </div>
     </main>
   );
 }

@@ -456,11 +456,11 @@ export default function HostPage() {
         {state.status === 'done' && state.champion && (
           <>
             {!slideshowActive && <Confetti />}
-            <div className="champion-card">
+            <div className="champion-card win-card">
               <div className="champion-label">🏆 Champion</div>
-              <div className="champion-quote">"{state.champion.text}"</div>
+              <div className="champion-quote win-quote">"{state.champion.text}"</div>
               {state.champion.author && (
-                <div className="champion-author">— {state.champion.author}</div>
+                <div className="champion-author win-author">— {state.champion.author}</div>
               )}
             </div>
             {/* Host-only: the popularity table needs the raw voter names, which
