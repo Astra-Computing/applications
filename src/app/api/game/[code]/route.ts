@@ -14,7 +14,7 @@ export async function GET(req: NextRequest, { params }: { params: { code: string
   // Host with valid token: return full state minus secret fields
   const hostToken = req.headers.get('x-host-token');
   if (hostToken && hostToken === state.hostToken) {
-    const { hostToken: _h, playerTokens: _p, ...hostState } = state;
+    const { hostToken: _h, playerTokens: _p, removedTokens: _r, ...hostState } = state;
     return NextResponse.json(hostState);
   }
 

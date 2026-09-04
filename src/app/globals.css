@@ -1380,3 +1380,67 @@ label { font-size: 0.88rem; color: var(--muted); display: block; margin-bottom: 
 @media (prefers-reduced-motion: reduce) {
   .player-recap { animation: none; opacity: 1; transform: none; }
 }
+
+/* ── Enlarged QR overlay (R17, U7) ── */
+.host-qr-button {
+  border: 1px solid var(--border);
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  transition: border-color 0.15s, transform 0.15s;
+}
+.host-qr-button:hover:not(:disabled) { border-color: var(--accent); transform: scale(1.02); }
+.host-qr-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.host-qr-button:disabled { cursor: default; }
+.host-qr-hint {
+  display: block;
+  margin-top: 0.4rem;
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted-dark);
+}
+
+/* The card is sized off the viewport's shorter axis so the code stays square
+   and uncropped at any width, including below the 600px breakpoint. */
+.qr-overlay-card {
+  max-width: min(92vw, 78vh);
+  width: 100%;
+  text-align: center;
+}
+.qr-overlay-code {
+  background: #f0f0f0;
+  border-radius: 12px;
+  padding: 1rem;
+  line-height: 0;
+}
+.qr-overlay-room {
+  font-size: clamp(1.8rem, 7vw, 3rem);
+  padding: 0.75rem 0 0.25rem;
+  background: none;
+  border: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .host-qr-button:hover:not(:disabled) { transform: none; }
+}
+
+/* ── Auto-advance control (R11, U6) ──
+   Sits beside the round-header action, in the shape of the lobby's
+   "Skip tutorial" checkbox. */
+.auto-advance {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0.4rem 0 0;
+  font-size: 0.8rem;
+  color: var(--muted);
+  cursor: pointer;
+}
+.auto-advance input {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}

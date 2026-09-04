@@ -135,15 +135,35 @@ export function castVote(state: GameState, matchupIndex: number, playerName: str
 // advancing early is the intended escape hatch, and always was.
 export const PLAYER_TIMEOUT_MS = 300_000;
 
-export function allVoted(state: GameState, now = Date.now()): boolean {
-  const active = Object.entries(state.participants)
+/** The single definition of "active". The host roster, the per-matchup
+ *  denominator, the player page's count and the advance gate all route through
+ *  this, so the visible roster and the gate can never disagree. */
+export function activePlayers(state: GameState, now = Date.now()): string[] {
+  return Object.entries(state.participants)
     .filter(([, ts]) => now - ts < PLAYER_TIMEOUT_MS)
     .map(([name]) => name);
-  if (active.length === 0) return false;
+}
+
+/** Players who both were present when the round started and are still active.
+ *  A player who joins mid-round may vote, but does not hold the gate shut. */
+export function eligibleVoters(state: GameState, now = Date.now()): string[] {
+  const active = activePlayers(state, now);
+  // Absent on rooms created before this field existed: fall back to the old
+  // behaviour of gating on everyone active rather than locking those rooms.
+  if (!state.roundVoters) return active;
+  const snapshot = new Set(state.roundVoters);
+  return active.filter(name => snapshot.has(name));
+}
+
+export function allVoted(state: GameState, now = Date.now()): boolean {
+  const eligible = eligibleVoters(state, now);
+  // An empty room cannot have "everyone voted". R11a's abandoned-room case is
+  // auto-advance's own condition, so the host button's meaning is unchanged.
+  if (eligible.length === 0) return false;
   for (const m of state.matchups) {
     if (m.a === null || m.b === null) continue;
     const voted = new Set([...m.votes.a, ...m.votes.b]);
-    for (const p of active) {
+    for (const p of eligible) {
       if (!voted.has(p)) return false;
     }
   }
@@ -179,8 +199,8 @@ export function advanceRound(state: GameState): GameState {
   return { ...state, status: 'results', round: state.round + 1, matchups: nextMatchups, bracketHistory: newHistory };
 }
 
-export function startVoting(state: GameState): GameState {
-  return { ...state, status: 'voting' };
+export function startVoting(state: GameState, now = Date.now()): GameState {
+  return { ...state, status: 'voting', roundVoters: activePlayers(state, now) };
 }
 
 export function getVoteCounts(m: Matchup): [number, number] {

@@ -34,6 +34,15 @@ export interface GameState {
   playerTokens: Record<string, string>;
   champion: Quote | null;
   createdAt: number;
+  /** Tokens of players the host removed. Never sent to any client - stripped
+   *  alongside hostToken and playerTokens. Optional: rooms created before this
+   *  field existed read as an empty list. */
+  removedTokens?: string[];
+  /** Players active when the current round started. `allVoted` gates on the
+   *  intersection of this and currently-active players, so a mid-round joiner
+   *  may vote but does not hold the gate shut. Absent on pre-existing rooms,
+   *  where the old all-active behaviour applies. */
+  roundVoters?: string[];
 }
 
 // Shape returned to player clients (no secret fields, no voter names)

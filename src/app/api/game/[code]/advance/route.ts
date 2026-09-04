@@ -28,6 +28,6 @@ export async function POST(req: NextRequest, { params }: { params: { code: strin
   // Clients stop polling once they see 'done', so the row goes idle either way.
   // Strip secrets exactly as the GET route does - the raw state carries every
   // player's token, which the host has no business receiving.
-  const { hostToken: _h, playerTokens: _p, ...hostState } = state;
+  const { hostToken: _h, playerTokens: _p, removedTokens: _r, ...hostState } = state;
   return NextResponse.json({ ok: true, state: hostState });
 }

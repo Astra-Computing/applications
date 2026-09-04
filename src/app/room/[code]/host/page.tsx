@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import dynamic from 'next/dynamic';
 import { GameState, Matchup } from '@/lib/types';
-import { allVoted, getVoteCounts, truncate, PLAYER_TIMEOUT_MS } from '@/lib/gameLogic';
+import { allVoted, getVoteCounts, truncate, activePlayers, eligibleVoters } from '@/lib/gameLogic';
 import QuoteCard from '@/components/QuoteCard';
 import VoteBar from '@/components/VoteBar';
 import BuyMeACoffee from '@/components/BuyMeACoffee';
@@ -32,12 +32,23 @@ export default function HostPage() {
   const [skipTutorial, setSkipTutorial] = useState(false);
   const [showTutorial, setShowTutorial] = useState(false);
   const [showEndConfirm, setShowEndConfirm] = useState(false);
+  const [showQr, setShowQr] = useState(false);
+  // R11/R12: auto-advance, restored per room from localStorage.
+  const [autoAdvance, setAutoAdvance] = useState(false);
+  // Records the phase+round already auto-fired. This CANNOT be the `acting`
+  // state flag: the effect closes over a stale value and would read false
+  // during an in-flight request, firing the same action twice.
+  const autoFiredRef = useRef('');
   // The round the host is currently being shown a recap of, captured from the
   // /advance response. Host-only and client-only: players never see it, and a
   // reload during `results` lands straight on the bracket.
   const [slideshowRound, setSlideshowRound] = useState<Matchup[] | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const failCountRef = useRef(0);
+
+  useEffect(() => {
+    setAutoAdvance(localStorage.getItem(`uq_auto_${code}`) === '1');
+  }, [code]);
 
   useEffect(() => {
     setJoinUrl(`${window.location.origin}/join?code=${code}`);
@@ -87,9 +98,16 @@ export default function HostPage() {
     poll();
     pollRef.current = setInterval(poll, 2000);
 
+    // Mobile and background tabs suspend timers. Re-sync on return so a host
+    // who looked away does not sit on a stale board - and so auto-advance
+    // resumes on the next tick rather than waiting out a suspended interval.
+    function onVisible() { if (document.visibilityState === 'visible') poll(); }
+    document.addEventListener('visibilitychange', onVisible);
+
     return () => {
       cancelled = true;
       if (pollRef.current) clearInterval(pollRef.current);
+      document.removeEventListener('visibilitychange', onVisible);
     };
   }, [code, hostToken]);
 
@@ -105,15 +123,16 @@ export default function HostPage() {
   // back to the controls, so without a keyboard dismissal a viewport that
   // clipped the button left them stuck.
   useEffect(() => {
-    if (!showTutorial && !showEndConfirm) return;
+    if (!showTutorial && !showEndConfirm && !showQr) return;
     function onKey(e: KeyboardEvent) {
       if (e.key !== 'Escape') return;
       setShowTutorial(false);
       setShowEndConfirm(false);
+      setShowQr(false);
     }
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [showTutorial, showEndConfirm]);
+  }, [showTutorial, showEndConfirm, showQr]);
 
   // The poll replaces `state` with a fresh object every 2s, so anything derived
   // from it is referentially new each tick and BracketDiagram re-diffs its whole
@@ -197,6 +216,37 @@ export default function HostPage() {
     }
   }
 
+  // ── Auto-advance (R11, R11a, R12) ──
+  // Above the early returns with the motion hooks, for the same reason: hook
+  // order must not depend on whether `state` has arrived yet.
+  //
+  // Fires exactly the action the visible button fires, so the button keeps its
+  // meaning and stays usable throughout. The ref guard - not `acting` - is what
+  // makes a second poll tick during an in-flight request a no-op.
+  useEffect(() => {
+    if (!autoAdvance || !state || acting) return;
+    const key = `${state.status}:${state.round}`;
+    if (autoFiredRef.current === key) return;
+
+    if (state.status === 'voting') {
+      // R11a: an abandoned room runs on to the champion rather than freezing.
+      // This is auto-advance's own condition - `allVoted` deliberately stays
+      // false for an empty room so the manual button's meaning is unchanged.
+      const abandoned = eligibleVoters(state).length === 0;
+      if (allVoted(state) || abandoned) {
+        autoFiredRef.current = key;
+        action('advance');
+      }
+    } else if (state.status === 'results' && slideshowRound === null) {
+      // Waiting on the recap is what keeps an abandoned room resolving at
+      // recap pace rather than at poll pace.
+      autoFiredRef.current = key;
+      action('start');
+    }
+    // `action` is a stable function declaration in this component's scope.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoAdvance, state, acting, slideshowRound]);
+
   // ── Motion hooks ──
   // These sit above the early returns below on purpose. Hooks must run in the
   // same order on every render, and `state` is null on the first pass - putting
@@ -242,7 +292,9 @@ export default function HostPage() {
     </main>
   );
 
-  const participants = Object.keys(state.participants);
+  // Active only (R14): the roster and the advance gate must never disagree,
+  // so both read the same predicate.
+  const participants = activePlayers(state);
   const slideshowActive = slideshowRound !== null;
   // U6/U7 (KTD9): the results screen renders UNDER the slideshow, which is
   // position:fixed inset:0 over an opaque background for up to ~9s. Motion
@@ -293,9 +345,26 @@ export default function HostPage() {
               >
                 {headerAction.label}
               </button>
-              {!headerAction.ready && !acting && (
+              {!headerAction.ready && !acting && !autoAdvance && (
                 <p className="round-header-status waiting-shimmer">{headerAction.status}</p>
               )}
+              <label className="auto-advance">
+                <input
+                  type="checkbox"
+                  checked={autoAdvance}
+                  onChange={e => {
+                    const on = e.target.checked;
+                    setAutoAdvance(on);
+                    // Persist per room so a reload does not silently change how
+                    // the game behaves (R12).
+                    localStorage.setItem(`uq_auto_${code}`, on ? '1' : '0');
+                    // Let the new setting act on the current phase immediately
+                    // rather than waiting for the next one.
+                    autoFiredRef.current = '';
+                  }}
+                />
+                Advance automatically
+              </label>
             </div>
           )}
           <div className="round-header-spacer" />
@@ -314,9 +383,18 @@ export default function HostPage() {
               {code}
             </div>
           </div>
-          <div className="host-qr-box">
+          {/* A real <button>, not a click-handling div: this has to be
+              reachable and operable by keyboard like every other control. */}
+          <button
+            type="button"
+            className="host-qr-box host-qr-button"
+            onClick={() => setShowQr(true)}
+            aria-label="Enlarge the join QR code"
+            disabled={!joinUrl}
+          >
             {joinUrl && <QRCode value={joinUrl} size={114} bgColor="#f0f0f0" fgColor="#0f0f13" />}
-          </div>
+            <span className="host-qr-hint">Tap to enlarge</span>
+          </button>
           <div className="host-players-box">
             <p className="host-bar-label">{shownPlayers} player{participants.length !== 1 ? 's' : ''} joined</p>
             <div className="chip-list">
@@ -383,7 +461,7 @@ export default function HostPage() {
               }
               const [va, vb] = getVoteCounts(m);
               const now = Date.now();
-              const total = participants.filter(p => now - state.participants[p] < PLAYER_TIMEOUT_MS).length;
+              const total = participants.length;
               return (
                 <div
                   key={`r${state.round}-${i}`}
@@ -481,6 +559,33 @@ export default function HostPage() {
       {/* ── Round-results recap (host only, client only) ── */}
       {slideshowRound && (
         <ResultsSlideshow round={slideshowRound} onFinish={() => setSlideshowRound(null)} />
+      )}
+
+      {/* ── Enlarged QR overlay (R17) ── */}
+      {showQr && joinUrl && (
+        <div
+          className="overlay qr-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Join QR code"
+          onClick={() => setShowQr(false)}
+        >
+          {/* Stop the card's own clicks from reaching the click-away handler. */}
+          <div className="card overlay-card qr-overlay-card" onClick={e => e.stopPropagation()}>
+            <div className="qr-overlay-code">
+              <QRCode
+                value={joinUrl}
+                size={512}
+                bgColor="#f0f0f0"
+                fgColor="#0f0f13"
+                style={{ width: '100%', height: 'auto' }}
+              />
+            </div>
+            <p className="room-code qr-overlay-room">{code}</p>
+            <p className="text-sm text-muted text-center">{joinUrl}</p>
+            <button className="btn btn-full mt-2" onClick={() => setShowQr(false)}>Close</button>
+          </div>
+        </div>
       )}
 
       {/* ── How to Play tutorial overlay ── */}
