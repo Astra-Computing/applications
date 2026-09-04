@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { Quote } from '@/lib/types';
 import { parseQuotebook, truncate } from '@/lib/gameLogic';
+import { useAnimatedNumber } from '@/lib/useAnimatedNumber';
 
 function previewQuote(text: string, maxLen: number): string {
   if (text.includes('\n')) {
@@ -30,14 +31,32 @@ export default function HostSetupPage() {
   const [dragging, setDragging] = useState(false);
   const [tipsOpen, setTipsOpen] = useState(true);
   const [previewOpen, setPreviewOpen] = useState(false);
+  // R8/R10 fire on a change in the parsed count, not on every keystroke (KTD11).
+  const [pulse, setPulse] = useState(false);
+  const lastCountRef = useRef<number | null>(null);
 
   const hasQuotes = quotes.length >= 2;
+  const shownCount = useAnimatedNumber(parsedCount ?? 0);
+  // R11: one shimmer sweep at the moment the action unlocks, not while it stays
+  // unlocked. Tracked rather than derived, because `hasQuotes` stays true after.
+  const wasUnlocked = useRef(false);
+  const [justUnlocked, setJustUnlocked] = useState(false);
+  useEffect(() => {
+    if (hasQuotes && !wasUnlocked.current) setJustUnlocked(true);
+    wasUnlocked.current = hasQuotes;
+  }, [hasQuotes]);
 
   // The single entry point for every input route - typing, pasting, dropping a
   // file, and picking one. Keeping one function here is what makes the three
   // routes provably identical rather than three parsers that drift.
   function ingest(raw: string) {
     const parsed = parseQuotebook(raw);
+    // Compared against a ref rather than inside a setState updater: an updater
+    // must stay pure, and React may invoke it twice in development.
+    if (lastCountRef.current !== parsed.length) {
+      lastCountRef.current = parsed.length;
+      setPulse(true);
+    }
     setParsedCount(parsed.length);
     if (parsed.length < 2) {
       setError(parsed.length === 0
@@ -63,6 +82,7 @@ export default function HostSetupPage() {
       setFileName('');
       setQuotes([]);
       setParsedCount(null);
+      lastCountRef.current = null;
     };
     reader.onload = ev => {
       const contents = ev.target?.result as string;
@@ -166,7 +186,10 @@ export default function HostSetupPage() {
             host clicking the box to type would get an OS file dialog instead of
             a cursor - and the textarea would inherit no accessible name, since
             the label's belongs to the input it targets. */}
-        <div className={`file-upload mt-1${dragging ? ' is-dragging' : ''}`}>
+        <div
+          className={`file-upload mt-1${dragging ? ' is-dragging' : ''}${pulse ? ' m-border-pulse' : ''}`}
+          onAnimationEnd={() => setPulse(false)}
+        >
           <textarea
             id="quotebook-text"
             className="qb-textarea"
@@ -187,7 +210,7 @@ export default function HostSetupPage() {
             </label>
             {parsedCount !== null && (
               <span className="qb-count" aria-live="polite">
-                {parsedCount} {parsedCount === 1 ? 'quote' : 'quotes'} found
+                {shownCount} {parsedCount === 1 ? 'quote' : 'quotes'} found
               </span>
             )}
           </div>
@@ -271,7 +294,7 @@ export default function HostSetupPage() {
             {quotes.slice(0, 10).map((q, i) => (
               // Keyed on content, not index: with key={i} React reuses the same
               // nodes across a second parse, so the entrance never replays.
-              <p key={`${q.author}|${q.text}`} className="text-sm qb-preview-row" style={{ ['--stagger-index' as string]: i }}>
+              <p key={`${q.author}|${q.text}`} className="text-sm qb-preview-row m-rise" style={{ ['--stagger-index' as string]: i, ['--stagger-step' as string]: '30ms' }}>
                 <em>{previewQuote(q.text, 80)}</em>
                 <span className="text-muted"> — {q.author}</span>
               </p>
@@ -286,8 +309,9 @@ export default function HostSetupPage() {
       {/* Always rendered so "disabled" is a real state R5 can describe and a
           test can assert on. It used to be mounted only when hasQuotes. */}
       <button
-        className="btn btn-primary btn-full mt-3"
+        className={`btn btn-primary btn-full mt-3${loading ? ' waiting-shimmer' : ''}${justUnlocked ? ' waiting-shimmer shimmer-once' : ''}`}
         onClick={handleCreate}
+        onAnimationEnd={() => setJustUnlocked(false)}
         disabled={!hasQuotes || loading}
       >
         {loading ? 'Creating…' : 'Create Game'}

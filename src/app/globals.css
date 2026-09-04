@@ -189,7 +189,12 @@ label { font-size: 0.88rem; color: var(--muted); display: block; margin-bottom: 
   height: 6px;
   border-radius: 6px;
   background: var(--accent);
-  transition: width 0.3s ease;
+  /* Overshoot easing rather than a linear ramp (R16). Votes arrive on the 2s
+     poll, so each width change is one discrete event and the spring reads as a
+     vote landing. The track is overflow:hidden, so the overshoot is clipped at
+     100% - asymmetric at the extremes, and acceptable: the endpoints are where
+     the bar is least ambiguous anyway. */
+  transition: width 0.45s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
 /* ── Participant chips ── */
@@ -1188,4 +1193,85 @@ label { font-size: 0.88rem; color: var(--muted); display: block; margin-bottom: 
   .m-value-flash,
   .m-bump { animation: none; }
   .shimmer-once { animation: none; }
+}
+
+/* ── Lobby motion (R13, U4) ──
+   The room code breathes while the lobby is open, and stops once the game
+   starts. Gold normally means "the prize"; spending it here is a deliberate
+   trade for the one screen where the code IS the thing to look at. */
+.host-room-code.is-waiting { animation: gold-breathe 4s ease-in-out infinite; }
+
+/* ── Results motion (R20, R21, U6) ── */
+.result-row.m-resolve {
+  animation: enter-rise 0.34s ease-out both;
+  animation-delay: calc(var(--stagger-index, 0) * 120ms);
+}
+/* The loser fades back as the winner settles, so the row reads as a decision
+   rather than two equal lines. */
+.result-row.m-resolve .result-loser {
+  animation: loser-dim 0.5s ease-out both;
+  animation-delay: calc(var(--stagger-index, 0) * 120ms + 0.2s);
+}
+.result-row.m-resolve .result-arrow {
+  animation: arrow-draw 0.42s ease-out both;
+  animation-delay: calc(var(--stagger-index, 0) * 120ms + 0.12s);
+}
+@keyframes loser-dim {
+  from { color: var(--text); }
+  to   { color: var(--muted-dark); }
+}
+@keyframes arrow-draw {
+  from { opacity: 0; transform: translateX(-8px); }
+  to   { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .host-room-code.is-waiting { animation: none; opacity: 1; }
+  .vote-bar-fill { transition: width 0.2s linear; }
+  .result-row.m-resolve,
+  .result-row.m-resolve .result-arrow {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+  /* The loser still ends dimmed - that is information, not decoration. */
+  .result-row.m-resolve .result-loser { animation: none; color: var(--muted-dark); }
+}
+
+/* R19 (U5): the waiting alert gives way to the success alert rather than
+   snapping. Keyed remount drives it, so it fires on the transition only. */
+.m-crossfade { animation: enter-fade 0.28s ease-out both; }
+@keyframes enter-fade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .m-crossfade { animation: none; opacity: 1; }
+}
+
+/* ── Bracket motion (R18, R22, U7) ──
+   Only the newest column animates. Earlier columns are positioned from their
+   round and matchup index, which do not change when a round is appended, so
+   there is no layout tween to play - the discontinuity is the new column
+   appearing and the view jumping to it. */
+.bracket-enter {
+  animation: bracket-in 0.4s ease-out both;
+  animation-delay: calc(var(--stagger-index, 0) * 70ms);
+  transform-box: fill-box;
+  transform-origin: center;
+}
+@keyframes bracket-in {
+  from { opacity: 0; transform: translateX(14px) scale(0.96); }
+  to   { opacity: 1; transform: none; }
+}
+/* R18: the round currently being voted on, findable across a room. */
+.bracket-active { animation: bracket-pulse 2.6s ease-in-out infinite; }
+@keyframes bracket-pulse {
+  0%, 100% { stroke: var(--border); }
+  50%      { stroke: var(--accent); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bracket-enter { animation: none; opacity: 1; transform: none; }
+  .bracket-active { animation: none; }
 }

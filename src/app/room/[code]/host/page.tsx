@@ -10,6 +10,7 @@ import VoteBar from '@/components/VoteBar';
 import BuyMeACoffee from '@/components/BuyMeACoffee';
 import ResultsSlideshow from '@/components/ResultsSlideshow';
 import WinRankings from '@/components/WinRankings';
+import { useAnimatedNumber } from '@/lib/useAnimatedNumber';
 
 const QRCode        = dynamic(() => import('react-qr-code'), { ssr: false });
 const BracketDiagram = dynamic(() => import('@/components/BracketDiagram'), { ssr: false });
@@ -196,6 +197,25 @@ export default function HostPage() {
     }
   }
 
+  // ── Motion hooks ──
+  // These sit above the early returns below on purpose. Hooks must run in the
+  // same order on every render, and `state` is null on the first pass - putting
+  // them after `if (!state) return` throws "Rendered more hooks than during the
+  // previous render" the moment the first poll lands. Every input is therefore
+  // computed defensively rather than from the post-guard locals.
+  const participantCount = state ? Object.keys(state.participants).length : 0;
+  // R15 / R23: counts animate between values.
+  const shownPlayers = useAnimatedNumber(participantCount);
+  const shownNext = useAnimatedNumber(state?.matchups.length ?? 0);
+  // R19: bump the forward action once, at the moment the room becomes ready.
+  const ready = state ? allVoted(state) : false;
+  const wasReady = useRef(false);
+  const [readyBump, setReadyBump] = useState(false);
+  useEffect(() => {
+    if (ready && !wasReady.current) setReadyBump(true);
+    wasReady.current = ready;
+  }, [ready]);
+
   if (error) return (
     <main className="page">
       <div className="alert alert-error">{error}</div>
@@ -224,6 +244,11 @@ export default function HostPage() {
 
   const participants = Object.keys(state.participants);
   const slideshowActive = slideshowRound !== null;
+  // U6/U7 (KTD9): the results screen renders UNDER the slideshow, which is
+  // position:fixed inset:0 over an opaque background for up to ~9s. Motion
+  // started on arrival at `results` would run to completion unseen, so it is
+  // keyed off the slideshow finishing instead.
+  const resultsRevealed = state?.status === 'results' && !slideshowActive;
 
   // The one control that moves the game forward, hoisted into the round header.
   // `ready` mirrors the server's own phase gate so the button never promises an
@@ -261,8 +286,9 @@ export default function HostPage() {
           {headerAction && (
             <div className="round-header-action">
               <button
-                className={`btn btn-primary${acting ? ' waiting-shimmer' : ''}`}
+                className={`btn btn-primary${acting ? ' waiting-shimmer' : ''}${readyBump ? ' m-bump' : ''}`}
                 onClick={headerAction.onClick}
+                onAnimationEnd={() => setReadyBump(false)}
                 disabled={acting || !headerAction.ready}
               >
                 {headerAction.label}
@@ -283,7 +309,7 @@ export default function HostPage() {
         {/* Info bar — always visible */}
         <div className="host-info-bar">
           <div className="host-code-box">
-            <div className="room-code host-room-code">
+            <div className={`room-code host-room-code${state.status === 'lobby' ? ' is-waiting' : ''}`}>
               <p className="host-bar-label">Room Code</p>
               {code}
             </div>
@@ -292,9 +318,11 @@ export default function HostPage() {
             {joinUrl && <QRCode value={joinUrl} size={114} bgColor="#f0f0f0" fgColor="#0f0f13" />}
           </div>
           <div className="host-players-box">
-            <p className="host-bar-label">{participants.length} player{participants.length !== 1 ? 's' : ''} joined</p>
+            <p className="host-bar-label">{shownPlayers} player{participants.length !== 1 ? 's' : ''} joined</p>
             <div className="chip-list">
-              {participants.map(p => <span key={p} className="chip">{p}</span>)}
+              {/* Keyed on the name, so an existing chip does not replay its
+                  entrance on every 2s poll tick. */}
+              {participants.map(p => <span key={p} className="chip m-pop">{p}</span>)}
               {participants.length === 0 && (
                 <span className="text-xs waiting-shimmer" style={{ display: 'inline-block' }}>
                   No one's here yet — share the code!
@@ -339,7 +367,7 @@ export default function HostPage() {
         {/* Voting phase */}
         {state.status === 'voting' && (
           <>
-            {allLayers.length > 0 && <BracketDiagram rounds={allLayers} currentRound={state.round} />}
+            {allLayers.length > 0 && <BracketDiagram rounds={allLayers} currentRound={state.round} revealed={!slideshowActive} />}
             <hr />
             <h3 style={{ marginBottom: '1rem', fontFamily: 'var(--font-sans)', fontWeight: 600, fontSize: '1rem' }}>
               Live Vote Counts
@@ -357,7 +385,11 @@ export default function HostPage() {
               const now = Date.now();
               const total = participants.filter(p => now - state.participants[p] < PLAYER_TIMEOUT_MS).length;
               return (
-                <div key={i} style={{ marginBottom: '1.5rem' }}>
+                <div
+                  key={`r${state.round}-${i}`}
+                  className="m-rise"
+                  style={{ marginBottom: '1.5rem', ['--stagger-index' as string]: i }}
+                >
                   <p className="match-header">Match {i + 1} — {va + vb}/{total} voted</p>
                   <div className="grid-3">
                     <QuoteCard quote={m.a} />
@@ -369,11 +401,11 @@ export default function HostPage() {
               );
             })}
             {allVoted(state) ? (
-              <div className="alert alert-success">
+              <div key="ready" className="alert alert-success m-crossfade">
                 <span className="waiting-shimmer">Everyone's voted — ready to move on!</span>
               </div>
             ) : (
-              <div className="alert alert-info">
+              <div key="waiting" className="alert alert-info m-crossfade">
                 <span className="waiting-shimmer">Hang tight — waiting on a few more votes…</span>
               </div>
             )}
@@ -383,7 +415,7 @@ export default function HostPage() {
         {/* Results phase */}
         {state.status === 'results' && (
           <>
-            {allLayers.length > 0 && <BracketDiagram rounds={allLayers} currentRound={state.round - 1} />}
+            {allLayers.length > 0 && <BracketDiagram rounds={allLayers} currentRound={state.round - 1} revealed={resultsRevealed} />}
             <hr />
             <h3 style={{ marginBottom: '1rem', fontFamily: 'var(--font-sans)', fontWeight: 600, fontSize: '1rem' }}>
               Round Results
@@ -398,7 +430,11 @@ export default function HostPage() {
                   const [va, vb] = getVoteCounts(m);
                   const [wv, lv] = ws === 'a' ? [va, vb] : [vb, va];
                   return (
-                    <div key={i} className="result-row">
+                    <div
+                      key={i}
+                      className={`result-row${resultsRevealed ? ' m-resolve' : ''}`}
+                      style={{ ['--stagger-index' as string]: i }}
+                    >
                       <div className="result-loser">"{truncate(loser.text, 55)}"</div>
                       <div className="result-arrow">→</div>
                       <div className="result-winner">
@@ -411,7 +447,7 @@ export default function HostPage() {
               </div>
             )}
             <p className="text-sm text-muted mb-2">
-              Up next: Round {state.round} — {state.matchups.length} matchup{state.matchups.length !== 1 ? 's' : ''}
+              Up next: Round {state.round} — {shownNext} matchup{state.matchups.length !== 1 ? 's' : ''}
             </p>
           </>
         )}
@@ -433,7 +469,7 @@ export default function HostPage() {
             {allLayers.length > 0 && (
               <div className="mt-3">
                 <p className="text-xs text-muted mb-1" style={{ textTransform: 'uppercase', letterSpacing: '0.1em' }}>Full bracket</p>
-                <BracketDiagram rounds={allLayers} currentRound={state.totalRounds} />
+                <BracketDiagram rounds={allLayers} currentRound={state.totalRounds} revealed={!slideshowActive} />
               </div>
             )}
             <button className="btn mt-3" onClick={() => router.push('/')}>↺ New Game</button>

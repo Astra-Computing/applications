@@ -1,12 +1,17 @@
 'use client';
 
 import { memo, useRef, useEffect } from 'react';
+import { prefersReducedMotion } from '@/lib/useAnimatedNumber';
 import { Matchup } from '@/lib/types';
 import { truncate, getVoteCounts } from '@/lib/gameLogic';
 
 interface Props {
   rounds: Matchup[][];   // [bracketHistory[0], ..., currentMatchups]
   currentRound: number;
+  /** False while the results slideshow covers the screen. The bracket renders
+   *  underneath a position:fixed inset:0 opaque overlay during `results`, so an
+   *  entrance played on arrival would finish unseen (KTD9). */
+  revealed?: boolean;
 }
 
 // Layout constants
@@ -24,7 +29,7 @@ function matchupCenterY(matchupIdx: number, roundIdx: number, firstRoundCount: n
   return PAD_Y + (matchupIdx + 0.5) * slotsPerMatchup * SLOT_H;
 }
 
-function BracketDiagram({ rounds, currentRound }: Props) {
+function BracketDiagram({ rounds, currentRound, revealed = true }: Props) {
   // Hooks must run before any early return - the previous order (return null
   // above useRef/useEffect) is a rules-of-hooks violation that throws
   // "Rendered more hooks than during the previous render" the first time this
@@ -32,13 +37,21 @@ function BracketDiagram({ rounds, currentRound }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const isEmpty = rounds.length === 0 || rounds[0].length === 0;
 
-  // Scroll to the rightmost column whenever a new round is added
+  // Travel to the rightmost column whenever a new round is added (R22).
+  //
+  // This is a script-driven scroll, so no prefers-reduced-motion rule in the
+  // stylesheet can reach it - the guard has to live here (KTD6). Held until
+  // `revealed` so it does not run behind the slideshow.
   useEffect(() => {
-    if (isEmpty) return;
-    if (scrollRef.current) {
-      scrollRef.current.scrollLeft = scrollRef.current.scrollWidth;
+    if (isEmpty || !revealed) return;
+    const el = scrollRef.current;
+    if (!el) return;
+    if (prefersReducedMotion()) {
+      el.scrollLeft = el.scrollWidth;
+      return;
     }
-  }, [rounds.length, isEmpty]);
+    el.scrollTo({ left: el.scrollWidth, behavior: 'smooth' });
+  }, [rounds.length, isEmpty, revealed]);
 
   // Guards an empty first round too: Math.max() over no elements is -Infinity,
   // which propagates into the SVG height as NaN.
@@ -107,8 +120,15 @@ function BracketDiagram({ rounds, currentRound }: Props) {
       const aColor = isCompleted ? (aWon ? '#e8e6e1' : '#444') : hasVotes && va > vb ? 'var(--accent)' : '#aaa';
       const bColor = isCompleted ? (bWon ? '#e8e6e1' : '#444') : hasVotes && vb > va ? 'var(--accent)' : '#aaa';
 
+      // Only the newest column animates in: every earlier column keeps the
+      // exact coordinates it already had, so there is nothing there to move.
+      const entering = revealed && isCurrentRound && rounds.length > 1;
       boxes.push(
-        <g key={`box-${rIdx}-${mIdx}`}>
+        <g
+          key={`box-${rIdx}-${mIdx}`}
+          className={entering ? 'bracket-enter' : undefined}
+          style={entering ? { ['--stagger-index' as string]: mIdx } : undefined}
+        >
           {/* Background */}
           <rect
             x={x} y={y}
@@ -117,6 +137,7 @@ function BracketDiagram({ rounds, currentRound }: Props) {
             fill="var(--card-bg)"
             stroke={borderColor}
             strokeWidth={1.5}
+            className={isCurrentRound && !isCompleted ? 'bracket-active' : undefined}
           />
           {/* Divider line */}
           <line x1={x + 8} y1={cy} x2={x + BOX_W - 8} y2={cy} stroke="var(--border)" strokeWidth={1} />
