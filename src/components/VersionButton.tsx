@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 
 const HISTORY = [
+  { v: '0.4.3', note: 'Players whose name holds an apostrophe, an emoji, or non-Latin letters stay connected for the whole game. The name used to travel with every request, which could stop the request leaving the phone at all and stranded that player on “Connection lost” with no way back.' },
   { v: '0.4.2', note: 'Results slideshow now has a rippling waterline and paces itself — brisk through big rounds, full length for the final. Phone players get a bigger header and footer, Join up front, a cursor waiting in the name box after a scan, a board that no longer jumps, and five minutes before a timeout. The win screen now ranks authors and players. Quotes written as an exchange, or signed with a bare name, are read correctly instead of keeping the name in the quote.' },
   { v: '0.4.1', note: 'Added host results slideshow; Start Next Round moved to the top of the host screen' },
   { v: '0.4.0', note: 'Champion screen now shows; reconnects recover; many reliability and accessibility fixes' },

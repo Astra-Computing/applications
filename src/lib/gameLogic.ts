@@ -82,6 +82,25 @@ export function joinGame(state: GameState, playerName: string, playerToken: stri
   };
 }
 
+// Resolves a player token back to the name it was issued to, or null when the
+// token belongs to nobody in this room.
+//
+// The name cannot travel in a header: HTTP header values must be Latin-1, so
+// `new Headers({'x-player-name': 'O’Brien'})` throws in the browser before the
+// request is ever sent - and iOS smart punctuation turns a typed ' into ’ on
+// its own. The token is the identity; the name is derived from it here.
+//
+// Iterating own properties matters: `playerTokens[name]` reads through the
+// prototype chain, so a player who calls themselves `toString` or `constructor`
+// would match a function off Object.prototype - truthy, and not their token.
+export function playerNameForToken(state: GameState, token: string | null | undefined): string | null {
+  if (!token) return null;
+  for (const [name, playerToken] of Object.entries(state.playerTokens)) {
+    if (playerToken === token) return name;
+  }
+  return null;
+}
+
 // Updates heartbeat timestamp without touching playerTokens
 export function refreshHeartbeat(state: GameState, playerName: string): GameState {
   if (!(playerName in state.participants)) return state;

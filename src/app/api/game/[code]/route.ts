@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { loadState, isValidCode } from '@/lib/gameState';
-import { sanitizeForPlayer } from '@/lib/gameLogic';
+import { sanitizeForPlayer, playerNameForToken } from '@/lib/gameLogic';
 
 export const runtime = 'nodejs';
 
@@ -18,10 +18,12 @@ export async function GET(req: NextRequest, { params }: { params: { code: string
     return NextResponse.json(hostState);
   }
 
-  // Player with valid token: return sanitised state with myVote populated
+  // Player with valid token: return sanitised state with myVote populated.
+  // The name is resolved from the token, never read from a header - an older
+  // client may still send `x-player-name`, and it is simply ignored.
   const playerToken = req.headers.get('x-player-token');
-  const playerName  = req.headers.get('x-player-name');
-  if (playerToken && playerName && state.playerTokens[playerName] === playerToken) {
+  const playerName  = playerNameForToken(state, playerToken);
+  if (playerName) {
     return NextResponse.json(sanitizeForPlayer(state, playerName));
   }
 

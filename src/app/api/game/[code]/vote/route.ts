@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { loadAndUpdate, isValidCode } from '@/lib/gameState';
-import { castVote } from '@/lib/gameLogic';
+import { castVote, playerNameForToken } from '@/lib/gameLogic';
 
 export const runtime = 'nodejs';
 
@@ -8,9 +8,11 @@ export async function POST(req: NextRequest, { params }: { params: { code: strin
   const code = params.code.toUpperCase();
   if (!isValidCode(code)) return NextResponse.json({ error: 'Invalid room code' }, { status: 400 });
 
+  // Token only: the name is resolved from it once the state is loaded. A client
+  // that still sends `x-player-name` is served normally - the header is never
+  // read, so it cannot be wrong.
   const playerToken = req.headers.get('x-player-token');
-  const playerName  = req.headers.get('x-player-name');
-  if (!playerToken || !playerName) {
+  if (!playerToken) {
     return NextResponse.json({ error: 'Unauthorised' }, { status: 401 });
   }
 
@@ -37,7 +39,8 @@ export async function POST(req: NextRequest, { params }: { params: { code: strin
   let phaseError = false;
   let rangeError = false;
   const state = await loadAndUpdate(code, s => {
-    if (s.playerTokens[playerName] !== playerToken) { authError = true; return s; }
+    const playerName = playerNameForToken(s, playerToken);
+    if (!playerName) { authError = true; return s; }
     if (s.status !== 'voting') { phaseError = true; return s; }
     if (index >= s.matchups.length) { rangeError = true; return s; }
     return castVote(s, index, playerName, choice);

@@ -135,8 +135,13 @@ function PlayerView() {
       inFlight = true;
       const startedAt = Date.now();
       try {
+        // Token only. Header values must be Latin-1, so sending the name here
+        // threw a TypeError inside fetch for anyone whose name held a curly
+        // apostrophe, an emoji or a non-Latin character - the request never
+        // left the phone and the player was stranded on "Connection lost".
+        // The stored name is for display; the server derives it from the token.
         const res = await fetch(`/api/game/${code}`, {
-          headers: { 'x-player-token': playerToken, 'x-player-name': name },
+          headers: { 'x-player-token': playerToken },
         });
         if (cancelled) return;
         if (res.ok) {
@@ -162,7 +167,7 @@ function PlayerView() {
     function beat() {
       fetch(`/api/game/${code}/heartbeat`, {
         method: 'POST',
-        headers: { 'x-player-token': playerToken, 'x-player-name': name },
+        headers: { 'x-player-token': playerToken },
       }).catch(() => {}); // offline beats are expected; don't surface as unhandled rejections
     }
 
@@ -218,7 +223,6 @@ function PlayerView() {
         headers: {
           'Content-Type': 'application/json',
           'x-player-token': playerToken,
-          'x-player-name': name,
         },
         body: JSON.stringify({ matchupIndex, choice }),
       });
