@@ -4,8 +4,13 @@
   "private": true,
   "scripts": {
     "dev": "next dev --turbo --hostname 0.0.0.0",
-    "build": "next build",
-    "start": "next start --hostname 0.0.0.0"
+    "build": "node scripts/guard-build.js && next build",
+    "build:unguarded": "next build",
+    "start": "next start --hostname 0.0.0.0",
+    "test": "vitest run --project unit",
+    "test:api": "vitest run --project api",
+    "test:all": "vitest run",
+    "typecheck:tests": "tsc -p tsconfig.test.json --noEmit"
   },
   "dependencies": {
     "@types/canvas-confetti": "^1.9.0",
@@ -21,6 +26,7 @@
     "@types/node": "^20",
     "@types/react": "^18",
     "@types/react-dom": "^18",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vitest": "^4.1.11"
   }
 }
