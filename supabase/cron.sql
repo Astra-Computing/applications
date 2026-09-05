@@ -1,24 +1,25 @@
--- One-time setup: run this in the Supabase SQL Editor (Dashboard → SQL Editor)
--- against your project before deploying. Not applied automatically.
+-- Scheduled cleanup. Run this in the Supabase SQL Editor AFTER schema.sql.
+-- Not applied automatically, and safely re-runnable.
+--
+-- Deliberately NOT applied to the test database: pg_cron does not exist on a
+-- stock Postgres image, and a scheduled delete is not something a test suite
+-- should have running underneath it.
 
--- Game state, one row per room. envelope holds the AES-256-GCM-encrypted
--- GameState JSON (iv/tag/enc), same encryption as before — only the storage
--- medium changed from Redis to Postgres.
-create table if not exists game_states (
-  room_code  text primary key,
-  envelope   jsonb not null,
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
-);
-
--- Rate limiting for POST /api/game/create, keyed by requester IP.
--- Replaces the old in-process Map (and the Upstash-Redis version before it) —
--- checked/updated inside a single Postgres transaction in the route handler.
-create table if not exists rate_limits (
-  ip       text primary key,
-  count    int not null default 1,
-  reset_at timestamptz not null
-);
+-- The order is not a convention, so it is not left to one. Running this half
+-- first would schedule a delete against tables that do not exist yet, and the
+-- run-by-hand nature of these files is exactly the situation where the wrong
+-- order is easy and the mistake is quiet. Fail loudly instead: the whole script
+-- aborts here, before anything is scheduled.
+do $$
+begin
+  if not exists (
+    select 1 from information_schema.tables
+    where table_schema = 'public' and table_name = 'game_states'
+  ) then
+    raise exception
+      'Run supabase/schema.sql before supabase/cron.sql - table "game_states" does not exist yet. Nothing has been scheduled.';
+  end if;
+end $$;
 
 -- Physically delete rooms that haven't been written to in 24h (matches the
 -- privacy notice shown in-app: data is deleted when a game ends or within

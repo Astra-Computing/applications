@@ -1,0 +1,30 @@
+{
+  // The test surface is excluded from tsconfig.json so a broken test cannot
+  // block a production build (KTD3, R23). That would leave test files
+  // typechecked by nothing - Vitest and Playwright transpile without checking,
+  // so a test referencing a renamed export would assert against `undefined`
+  // and pass. This project is what checks them, via `npm run typecheck:tests`
+  // (R27).
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    // The app tsconfig sets no `target`, so it defaults to ES5 and rejects
+    // unicode property escapes and the regex `u` flag with TS1501. Test code
+    // runs on Node 20 and has no such constraint.
+    "target": "ES2022",
+    "lib": ["ES2022", "dom", "dom.iterable"],
+    "types": ["node"]
+  },
+  "include": [
+    "src/**/*.test.ts",
+    "tests/**/*.ts",
+    "vitest.config.mts",
+    "playwright.config.ts"
+  ],
+  // Load-bearing, and not a tidy-up. `extends` REPLACES include/exclude rather
+  // than merging them, so without this line the parent's exclude applies - and
+  // that list holds "**/*.test.ts" and "tests", which is every file this project
+  // exists to check. `typecheck:tests` would then check nothing, exit 0, and
+  // look green while checking an empty file set.
+  "exclude": ["node_modules"]
+}
