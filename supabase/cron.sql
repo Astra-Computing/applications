@@ -5,6 +5,22 @@
 -- stock Postgres image, and a scheduled delete is not something a test suite
 -- should have running underneath it.
 
+-- The order is not a convention, so it is not left to one. Running this half
+-- first would schedule a delete against tables that do not exist yet, and the
+-- run-by-hand nature of these files is exactly the situation where the wrong
+-- order is easy and the mistake is quiet. Fail loudly instead: the whole script
+-- aborts here, before anything is scheduled.
+do $$
+begin
+  if not exists (
+    select 1 from information_schema.tables
+    where table_schema = 'public' and table_name = 'game_states'
+  ) then
+    raise exception
+      'Run supabase/schema.sql before supabase/cron.sql - table "game_states" does not exist yet. Nothing has been scheduled.';
+  end if;
+end $$;
+
 -- Physically delete rooms that haven't been written to in 24h (matches the
 -- privacy notice shown in-app: data is deleted when a game ends or within
 -- 24 hours automatically). updated_at refreshes on every game action, so

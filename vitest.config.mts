@@ -5,7 +5,12 @@ export default defineConfig({
   resolve: {
     // Mirrors the `@/*` path mapping in tsconfig.json so tests import modules
     // by the same specifier the application uses.
-    alias: { '@': path.resolve(__dirname, 'src') },
+    //
+    // `import.meta.dirname`, not `__dirname`: this is an ESM `.mts` config, and
+    // Vite warns on every run that `__dirname` is unsupported by the native
+    // config loader that is due to become the default. When it does, the alias
+    // stops resolving and every `@/...` import in the suite breaks.
+    alias: { '@': path.resolve(import.meta.dirname, 'src') },
   },
   test: {
     // Two projects, because they have genuinely different needs. The pure

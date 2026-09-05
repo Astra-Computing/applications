@@ -21,5 +21,10 @@
     "vitest.config.mts",
     "playwright.config.ts"
   ],
+  // Load-bearing, and not a tidy-up. `extends` REPLACES include/exclude rather
+  // than merging them, so without this line the parent's exclude applies - and
+  // that list holds "**/*.test.ts" and "tests", which is every file this project
+  // exists to check. `typecheck:tests` would then check nothing, exit 0, and
+  // look green while checking an empty file set.
   "exclude": ["node_modules"]
 }

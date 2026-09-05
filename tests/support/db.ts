@@ -35,23 +35,64 @@ export function testConnectionString(): string {
 }
 
 /**
- * Refuses to continue against production.
+ * Hosts the suite is permitted to touch. Anything else is refused.
+ *
+ * The test database lives on the compose network as `test-db` (see the
+ * workspace `docker-compose.yml`); the loopback names are here for a suite run
+ * against a Postgres started by hand.
+ */
+const ALLOWED_HOSTS = new Set(['test-db', 'localhost', '127.0.0.1', '::1']);
+
+/** Substrings that name the production project, kept so the refusal can say so. */
+const PRODUCTION_MARKERS = ['supabase.co', 'supabase.com', 'pooler.supabase'];
+
+/**
+ * Refuses to continue against anything but the test database.
  *
  * The hazard is a connection string that is PRESENT and points at the live
  * project, not one that is missing — guarding only against absence would have
  * let the whole suite run against production while looking fine.
+ *
+ * This is an ALLOWLIST, and that shape is the point. It began as a denylist of
+ * Supabase substrings, which default-allowed: `DB.ABCDEFGH.SUPABASE.CO` passed
+ * on case alone, and so did any production database that is not Supabase. What
+ * gets past here reaches `resetDatabase`, which truncates. A guard whose job is
+ * "never touch production" has to fail closed, so an unrecognised host is
+ * refused rather than permitted.
  */
 export function assertNotProduction(url: string): void {
-  const banned = ['supabase.com', 'supabase.co', 'pooler.supabase'];
-  const hit = banned.find(needle => url.includes(needle));
-  if (hit) {
+  let hostname: string;
+  try {
+    // `.toLowerCase()` is load-bearing and not belt-and-braces. `postgres:` is a
+    // NON-SPECIAL URL scheme, so WHATWG parses the host as an opaque host and
+    // preserves its case - `new URL('postgres://u:p@DB.X.SUPABASE.CO/d').hostname`
+    // is `'DB.X.SUPABASE.CO'`, not the lowercased form an `http:` URL would give.
+    // Comparing without this reintroduces the exact case bypass this allowlist
+    // replaced. The replace strips the brackets the parser puts around IPv6.
+    hostname = new URL(url).hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  } catch {
     throw new Error(
-      `Refusing to run: the resolved database URL contains "${hit}", so it ` +
-      'points at the production Supabase project. Tests must never write ' +
-      'there. Set SUPABASE_DB_URL to the test database in the process ' +
-      'environment.'
+      'Refusing to run: the resolved database URL could not be parsed, so its ' +
+      'host cannot be checked. Set SUPABASE_DB_URL to the test database in the ' +
+      'process environment.'
     );
   }
+
+  if (ALLOWED_HOSTS.has(hostname)) return;
+
+  const marker = PRODUCTION_MARKERS.find(needle => hostname.includes(needle));
+  throw new Error(
+    marker
+      ? `Refusing to run: the resolved database URL points at "${hostname}", ` +
+        'which is the production Supabase project. Tests must never write ' +
+        'there. Set SUPABASE_DB_URL to the test database in the process ' +
+        'environment.'
+      : `Refusing to run: the resolved database URL points at "${hostname}", ` +
+        `which is not a known test database (allowed: ${[...ALLOWED_HOSTS].join(', ')}). ` +
+        'Refusing rather than guessing, because what runs here truncates every ' +
+        'table. Set SUPABASE_DB_URL to the test database in the process ' +
+        'environment.'
+  );
 }
 
 export function connect(): Sql {

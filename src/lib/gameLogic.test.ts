@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import {
@@ -33,6 +33,56 @@ function readCode(rel: string): string {
     .replace(/\/\*[\s\S]*?\*\//g, '')
     .replace(/(^|[^:])\/\/.*$/gm, '$1');
 }
+
+// ── Deterministic randomness (R9) ────────────────────────────────────────────
+//
+// `buildBracket` shuffles and `advanceRound` settles ties by coin flip, both
+// through `Math.random`. Every assertion below that loops hundreds of times was
+// therefore irreproducible: a failure could not be replayed, and this project's
+// own rule is that a test failing for a reason unrelated to the change under
+// test gets deleted rather than retried. A tolerated flake is how a suite starts
+// being abandoned, so the randomness is made repeatable rather than tolerated.
+//
+// `Math.random` is replaced per test with a seeded mulberry32. The seed is
+// derived from the test name, so it is stable across runs and different between
+// tests, and it is printed when a test fails so the exact sequence can be
+// replayed with `UQ_TEST_SEED=<n> npx vitest run --project unit`.
+//
+// The runs are still hundreds strong. Seeding makes a failure reproducible; it
+// does not make one run sufficient, because a seed exercises one sequence and
+// the invariants here are about the whole space.
+
+function mulberry32(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/** FNV-1a over the test name, so each test gets its own stable sequence. */
+function seedFromName(name: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < name.length; i++) h = Math.imul(h ^ name.charCodeAt(i), 16777619);
+  return h >>> 0;
+}
+
+let activeSeed = 0;
+
+beforeEach(() => {
+  const override = process.env.UQ_TEST_SEED;
+  activeSeed = override ? Number(override) >>> 0 : seedFromName(expect.getState().currentTestName ?? '');
+  vi.spyOn(Math, 'random').mockImplementation(mulberry32(activeSeed));
+});
+
+afterEach(ctx => {
+  vi.restoreAllMocks();
+  if (ctx?.task?.result?.state === 'fail') {
+    console.error(`[seed] replay this failure with UQ_TEST_SEED=${activeSeed}`);
+  }
+});
 
 const quotes = (n: number): Quote[] =>
   Array.from({ length: n }, (_, i) => ({ text: `quote ${i}`, author: `A${i}` }));
@@ -94,9 +144,25 @@ describe('playerNameForToken', () => {
   });
 
   it('never matches a value inherited from the prototype chain', () => {
+    // This needs a REAL inherited entry to mean anything. An earlier version of
+    // this test looked up 'toString' in an empty object, which passes under any
+    // implementation - Object.prototype.toString is a function, never the string
+    // 'toString'. Reverting playerNameForToken to a prototype-unsafe `for...in`
+    // left the whole suite green. With the inherited 'Ghost' entry below, that
+    // same revert resolves 'tok-inherited' to 'Ghost' and fails here.
+    const inherited: Record<string, string> = Object.create({ Ghost: 'tok-inherited' });
+    inherited.Real = 'tok-real';
+    const s = { playerTokens: inherited } as unknown as GameState;
+
+    expect(playerNameForToken(s, 'tok-inherited')).toBeNull();
+    expect(playerNameForToken(s, 'tok-real')).toBe('Real');
+
     const empty = { playerTokens: {} } as unknown as GameState;
-    // Object.prototype.toString is a function, never a token string.
     expect(playerNameForToken(empty, 'toString')).toBeNull();
+  });
+
+  it('does not match a stringified prototype member used as a token', () => {
+    expect(playerNameForToken(state, String(Object.prototype.toString))).toBeNull();
   });
 });
 
@@ -117,6 +183,24 @@ describe('no authenticated route carries the player name in a header', () => {
 
   it.each(files.slice(0, 3))('%s resolves the name from the token', file => {
     expect(readCode(file)).toContain('playerNameForToken');
+  });
+
+  // Carried back from _check_identity.js. Deleting the 401 guard from both
+  // routes left every other test in this file green, so nothing else covers it.
+  it.each([
+    '../app/api/game/[code]/vote/route.ts',
+    '../app/api/game/[code]/heartbeat/route.ts',
+  ])('%s still rejects a request with no player token', file => {
+    expect(readCode(file)).toMatch(/if\s*\(!playerToken\)/);
+  });
+
+  // Join is deliberately absent from `files` above: it is the one route that
+  // legitimately handles a name. What must hold is that the name arrives in the
+  // JSON body and never in a header.
+  it('the join route reads the name from the body, not from a header', () => {
+    const src = readCode('../app/api/game/[code]/join/route.ts');
+    expect(src).not.toContain('x-player-name');
+    expect(src).toMatch(/body\.name|const\s*\{\s*name/);
   });
 });
 
@@ -279,17 +363,50 @@ describe('buildBracket', () => {
     //
     // Do NOT "fix" this toward separation. Removing the interleave roughly
     // halves early meetings, which is the opposite of what the game wants.
-    const field = [
-      ...Array.from({ length: 6 }, (_, k) => ({ text: `same ${k}`, author: 'Same' })),
-      ...Array.from({ length: 8 }, (_, k) => ({ text: `other ${k}`, author: `Other${k}` })),
-    ];
-    let clashes = 0;
-    for (let i = 0; i < 100; i++) {
+    //
+    // ASSERT THE NUMBERS, NOT THE INTENT. Two weaker versions of this test have
+    // now failed to hold the line, and both failed the same way - they described
+    // the behaviour instead of measuring it:
+    //
+    //   `clashes > 0` on one 14-quote field. Passed with the whole BYE
+    //   relocation deleted (14 is even, so that code never ran), and passed with
+    //   the interleave deleted.
+    //
+    //   `odd <= even`. Puts the BYE in the measurement, which the above did not,
+    //   but still passed with the interleave deleted.
+    //
+    // For an even field the count is EXACT and identical on every build, so it
+    // can simply be asserted. Removing the interleave takes 6-of-14 from 2 to 3,
+    // which these numbers catch. They are the same figures recorded in the
+    // project notes, measured here rather than quoted.
+    const clashesIn = (sameN: number, otherN: number): number => {
+      const field = [
+        ...Array.from({ length: sameN }, (_, k) => ({ text: `same ${k}`, author: 'Same' })),
+        ...Array.from({ length: otherN }, (_, k) => ({ text: `other ${k}`, author: `Other${k}` })),
+      ];
+      let clashes = 0;
       for (const [a, b] of buildBracket(field)) {
         if (a && b && a.author === b.author) clashes++;
       }
+      return clashes;
+    };
+
+    // Even fields: no BYE, and the count does not vary between builds.
+    for (let i = 0; i < 300; i++) {
+      expect(clashesIn(2, 12)).toBe(0);  // exactly two quotes: the one case that separates
+      expect(clashesIn(3, 11)).toBe(1);
+      expect(clashesIn(5, 9)).toBe(2);
+      expect(clashesIn(6, 8)).toBe(2);   // 3 without the interleave
+      expect(clashesIn(7, 7)).toBe(3);
     }
-    expect(clashes).toBeGreaterThan(0);
+
+    // An odd field relocates the BYE at random, so its count varies - but it can
+    // never exceed the even baseline. This is the assertion carried over from
+    // _check_bracket.js, and it is what puts the BYE code in the measurement.
+    let odd = 0;
+    const runs = 300;
+    for (let i = 0; i < runs; i++) odd += clashesIn(6, 7);
+    expect(odd / runs).toBeLessThanOrEqual(2);
   });
 });
 
@@ -297,7 +414,7 @@ describe('advanceRound', () => {
   it('never gives the BYE to the same quote in consecutive rounds', () => {
     let violations = 0;
     let byeRounds = 0;
-    for (let i = 0; i < 60; i++) {
+    for (let i = 0; i < 300; i++) {
       for (const n of [9, 11, 12, 13, 17]) {
         const byes = playOut(n).bracketHistory.map(byeTextOf);
         byes.forEach((b, r) => {
@@ -370,7 +487,7 @@ describe('advanceRound', () => {
     });
 
   it.each([3, 5, 9, 11, 12, 13, 17, 33])('resolves a %i-quote field to a champion', n => {
-    for (let i = 0; i < 20; i++) {
+    for (let i = 0; i < 40; i++) {
       const done = playOut(n);
       expect(done.status).toBe('done');
       expect(done.champion).toBeTruthy();

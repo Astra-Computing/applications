@@ -21,7 +21,7 @@ directory and keeps the path short.
 │   ├── components/     React components
 │   └── lib/            game logic, DB access, types
 ├── public/             static assets
-├── supabase/           setup.sql — schema and scheduled cleanup
+├── supabase/           schema.sql then cron.sql — tables, then scheduled cleanup
 ├── quotebooks/         real quote source data (untracked, local only)
 └── _pw_*.js            browser diagnostic scripts
 ```
