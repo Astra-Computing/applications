@@ -445,6 +445,69 @@ Rules that are not negotiable here:
 - **`PLAYWRIGHT_BROWSERS_PATH` is exported for install and for run**, or a second Chromium lands in the container filesystem and dies with the container.
 - **No test may point at the production Supabase project**, and the suite proves it by refusing to start rather than by hoping.
 
+## Deviations
+
+Recorded here rather than silently absorbed, as the Definition of Done requires.
+All were found during execution on `feat/test-architecture`, 2026-09-05.
+
+- **U6 step 5's stated mechanism does not work.** It asks for the served build id
+  from the `/_next/static/<buildId>/` segment of the page's script URLs. The App
+  Router does not put it there — it carries the id in the RSC flight payload, and
+  the guard reads it from there instead. A chunk-existence check would not have
+  worked either: chunk filenames are content-hashed, so an unchanged source
+  produces identical names and only the build id moves. The requirement (R19) is
+  met; the route to it changed.
+
+- **U5 could not reuse `tests/support/server.ts` as Playwright's `globalSetup`.**
+  Playwright loads `globalSetup` in the runner process and transforms only
+  statically visible dependencies, so that file's deliberate `await import()`
+  calls throw `Cannot use import statement outside a module`. The lifecycle is
+  re-expressed in `webServer` with the constants imported so the encryption key
+  cannot drift. U4's sentinel probe was carried into U6's global setup instead.
+
+- **U7 covers eight driver scripts, not seven.** The unit's prose says seven while
+  its own `Files:` list names eight, and KTD7 says "four live at
+  `/workspace/tools/playwright`" then lists five. Eight is the real number; all
+  eight were ported and deleted, plus four `_probe*.js` scratch files.
+
+- **Two driver checks were dropped as vacuous rather than ported.**
+  `_pw_winscreen.js` counted `.results-wave` elements — no such class exists
+  (`results-wave` is the keyframe name; the elements are `.slide-wave`), so the
+  count was structurally always zero. `_pw_slideshow.js` logged
+  `R2_scroll_unchanged`, which is false as an assertion: skipping the recap swaps
+  in a shorter screen and the browser legitimately returns to the top. What that
+  log was reaching for is asserted instead.
+
+- **R12's status codes were wider than anticipated.** The plan named 400/401/404/409.
+  The real surface also includes 403 (`reason: 'removed'` for a kicked token), 429
+  (the eleventh room in an hour), and `/kick` answering 200 for a name nobody
+  holds. Asserted as the code actually behaves.
+
+- **The Success Criterion "under 30 seconds" is not met for `npm test`.** The
+  non-browser layers take ~200s, of which ~190s is the `next build` that U4's
+  `globalSetup` runs so the API layer can exercise a production build. The tests
+  themselves take ~8s. `npm run test:unit` alone is ~3s and does meet the spirit
+  of the criterion. Options, none taken unilaterally: accept it; split CI and
+  local so only `test:unit` is the pre-commit gate; or cache the build on a
+  source hash, which reintroduces the stale-build risk the plan is emphatic
+  about. **Open for the user's decision.**
+
+- **The suite spends seven of ten room creations per hour.** `/api/game/create` is
+  capped in application code, tests send no `x-forwarded-for`, and global setup
+  truncates `rate_limits` once per run — so the whole browser layer shares one
+  budget of ten. Roughly three more room-taking tests will trip it, and the
+  failure will look like a server fault rather than a budget.
+
+- **R28's required-check setting is not applied.** Marking "Unit tests &
+  typecheck" and "API tests (Postgres)" as required on `main` is a repository
+  settings change, deliberately left for the user.
+
+- **One application defect was found and reported rather than fixed**, per the
+  plan's stop condition: `/api/game/create` answers **500** for a malformed JSON
+  body while `/join`, `/vote` and `/kick` answer **400** for the same input,
+  because `/create` parses inside its outer `try`. It also logs a full stack for
+  what is a client error.
+
 ## Definition of Done
 
 - Every requirement R1-R31 holds, except R22 which covers only the non-browser layers.
