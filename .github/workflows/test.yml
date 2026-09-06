@@ -76,11 +76,10 @@ jobs:
       # (test-db, localhost, 127.0.0.1, ::1), so the suite's own refusal-to-run
       # guard is satisfied rather than bypassed.
       SUPABASE_DB_URL: postgres://postgres:postgres@localhost:5432/postgres
-      # Fixed, non-secret test key — 64 hex characters, matching the same
-      # TEST_ENCRYPTION_KEY tests/support/server.ts hardcodes for the server
-      # it starts. It protects nothing in CI; a repo secret would only make
-      # this workflow fail confusingly for forks that can't see it.
-      GAME_ENCRYPTION_KEY: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
+      # GAME_ENCRYPTION_KEY is deliberately NOT set here. tests/support/server.ts
+      # overrides it with its own TEST_ENCRYPTION_KEY for both the build and the
+      # server it starts, so a value here would never be read - and a stale copy
+      # of a constant that looks authoritative is worse than no copy at all.
     steps:
       - name: Checkout
         uses: actions/checkout@v4

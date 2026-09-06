@@ -123,6 +123,7 @@ export default defineConfig({
    * already let one test run against the wrong thing (KTD5).
    */
   globalSetup: './tests/e2e/fixtures/global-setup.ts',
+  globalTeardown: './tests/e2e/fixtures/global-teardown.ts',
 
   webServer: {
     command,

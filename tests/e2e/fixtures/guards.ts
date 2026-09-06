@@ -1,6 +1,21 @@
-import { test as base, type BrowserContext, type Page } from '@playwright/test';
+import { test as base, type BrowserContext, type Page, type TestInfo } from '@playwright/test';
 import fs from 'node:fs';
 import path from 'node:path';
+
+/**
+ * The running test's info, or null outside a test.
+ *
+ * `test.info()` throws rather than returning null when no test is running, and
+ * `acknowledge()` has to work out who called it without that throw replacing the
+ * real error.
+ */
+function testInfo(): TestInfo | null {
+  try {
+    return base.info();
+  } catch {
+    return null;
+  }
+}
 
 /**
  * The two standing guards, and the `test` object every browser spec must import.
@@ -77,6 +92,64 @@ export type CspViolation = {
  */
 const CSP_CONSOLE = /content security policy/i;
 
+/**
+ * Where a worker leaves CSP violations for the runner to find.
+ *
+ * Under `.playwright/` so it is gitignored with the other run artifacts.
+ */
+const RUN_SINK = path.join(REPO_ROOT, '.playwright', 'csp-violations.json');
+
+/** Append violations to the run sink. Never throws - it is a reporting path. */
+function recordToRunSink(violations: readonly CspViolation[]): void {
+  try {
+    fs.mkdirSync(path.dirname(RUN_SINK), { recursive: true });
+    const existing: CspViolation[] = fs.existsSync(RUN_SINK)
+      ? JSON.parse(fs.readFileSync(RUN_SINK, 'utf8'))
+      : [];
+    fs.writeFileSync(RUN_SINK, JSON.stringify([...existing, ...violations], null, 1));
+  } catch {
+    // A failed sink write must not mask the violation the caller is about to
+    // throw about; the per-test failure still stands on its own.
+  }
+}
+
+/** Empties the sink. Called once by global setup, before any test runs. */
+export function clearCspRunSink(): void {
+  try {
+    fs.rmSync(RUN_SINK, { force: true });
+  } catch {
+    /* nothing to clear */
+  }
+}
+
+/**
+ * Fails the run if any test recorded a CSP violation, however that test ended.
+ *
+ * The per-test assertion in the fixture teardown is the primary signal; this is
+ * the backstop for the one case that assertion cannot cover on its own - a test
+ * whose failure is expected (`test.fail()`), which inverts the guard's throw
+ * into a pass.
+ */
+export function assertNoCspViolationsThisRun(): void {
+  let recorded: CspViolation[] = [];
+  try {
+    if (!fs.existsSync(RUN_SINK)) return;
+    recorded = JSON.parse(fs.readFileSync(RUN_SINK, 'utf8'));
+  } catch {
+    return;
+  }
+  if (recorded.length === 0) return;
+  const lines = recorded.map(v => `  - ${v.message}\n      seen on ${v.pageUrl}`).join('\n');
+  clearCspRunSink();
+  throw new Error(
+    'Content Security Policy violations were recorded during this run (R18, R20):\n' +
+    `${lines}\n\n` +
+    'This is the run-level backstop. It reports violations even from a test whose own\n' +
+    'failure was expected, because such a test inverts the per-test guard into a pass.\n' +
+    'The CSP is built in next.config.js.',
+  );
+}
+
 export class CspGuard {
   private readonly seen: CspViolation[] = [];
   private readonly acknowledged: CspViolation[] = [];
@@ -141,6 +214,20 @@ export class CspGuard {
    * file exists to serve.
    */
   acknowledge(pattern: RegExp): CspViolation[] {
+    // Enforced, not just asked for. A comment saying "one caller only" is worth
+    // nothing here: this method silently removes violations from the failing
+    // set, so a spec that reached for it would opt itself out of R18 and still
+    // look green. The guard's own self-test is the single legitimate caller.
+    const caller = testInfo()?.file ?? '';
+    if (path.basename(caller) !== 'guards.spec.ts') {
+      throw new Error(
+        `cspGuard.acknowledge() is for tests/e2e/guards.spec.ts alone, and was called from\n` +
+        `  ${caller || '<unknown spec>'}\n` +
+        'Acknowledging a violation anywhere else opts that test out of R18 - the requirement\n' +
+        'this whole file exists to serve. If a CSP violation is expected, fix the CSP; if a\n' +
+        'test genuinely must provoke one, extend the self-test rather than widening this.',
+      );
+    }
     const matched: CspViolation[] = [];
     for (let i = this.seen.length - 1; i >= 0; i--) {
       if (pattern.test(this.seen[i].message)) matched.unshift(...this.seen.splice(i, 1));
@@ -153,6 +240,13 @@ export class CspGuard {
   assertNone(): void {
     if (this.seen.length === 0) return;
     const lines = this.seen.map(v => `  - ${v.message}\n      seen on ${v.pageUrl}`).join('\n');
+    // Record before throwing. A test declared `test.fail()` INVERTS its result,
+    // so this throw becomes that test's expected failure and the run stays
+    // green - the guard's verdict absorbed by a test that was going to fail
+    // anyway. The sink is read in globalTeardown, where nothing can invert it.
+    // It is a file because the guard runs in a worker process and the teardown
+    // runs in the runner; a module-level array would never cross that boundary.
+    recordToRunSink(this.seen);
     this.seen.length = 0;
     throw new Error(
       'Content Security Policy violation (R18). The browser blocked something, and a CSP\n' +
@@ -355,6 +449,59 @@ async function assertAdvertisedChunksResolve(
  * Importing types or `expect` from `@playwright/test` is fine and common; only
  * `test` carries the fixtures.
  */
+
+/**
+ * What Playwright actually collects, which is wider than `*.spec.ts`.
+ *
+ * `playwright.config.ts` sets `testDir` and no `testMatch`, so the runner's own
+ * default applies: `**​/*.@(spec|test).?(c|m)[jt]s?(x)`. An earlier version of
+ * this scanner filtered on `/\.spec\.[cm]?tsx?$/`, which skips `.test.ts`,
+ * `.spec.js` and `.test.tsx` - three of the four ordinary spec names. A spec in
+ * any of them ran with no CSP guard while THIS function reported success, which
+ * is the worst shape a guard can take: it fails open and says it passed.
+ *
+ * Keep this in step with the runner. If `testMatch` is ever set in the config,
+ * this has to match it, and the self-test below is what will tell you.
+ */
+const COLLECTED_BY_RUNNER = /\.(spec|test)\.[cm]?[jt]sx?$/;
+
+/**
+ * Whether a source file binds Playwright's own `test` under any import shape.
+ *
+ * Named braces were the only shape checked before. A default import, a
+ * namespace import, or `require` all reach the same unguarded object:
+ *
+ *   import pw from '@playwright/test';            pw.test(...)
+ *   import * as pw from '@playwright/test';       pw.test(...)
+ *   const { test } = require('@playwright/test');
+ *
+ * `expect` and type-only imports stay allowed - they carry no fixtures.
+ */
+export function importsRunnerTest(src: string): boolean {
+  const SPEC = String.raw`['"]@playwright/test['"]`;
+  // Anchored to the start of a line, because a real import or require is a
+  // STATEMENT. Without the anchor this matches its own examples: the scanner's
+  // self-test lists every escaping shape as a string literal, and an unanchored
+  // pattern reads those as imports and refuses the run. A guard that fails on
+  // the file documenting it is not a guard anybody keeps.
+  const M = 'gm';
+  const at = (body: string) => new RegExp(String.raw`^[ 	]*` + body, M);
+
+  // import { test } / { test as t }, but not `import type { ... }`.
+  for (const m of src.matchAll(at(String.raw`import\s+(type\s+)?\{([^}]*)\}\s*from\s*${SPEC}`))) {
+    if (m[1]) continue;
+    const named = m[2].split(',').map(n => n.trim().split(/\s+as\s+/)[0].trim());
+    if (named.includes('test')) return true;
+  }
+  // import pw from ... / import * as pw from ... / import pw, { expect } from ...
+  if (at(String.raw`import\s+(?!type\s)(\*\s*as\s+)?[A-Za-z_$][\w$]*\s*(,\s*\{[^}]*\})?\s*from\s*${SPEC}`).test(src)) {
+    return true;
+  }
+  // const { test } = require(...) / const pw = await import(...)
+  if (at(String.raw`(?:const|let|var)\s[^
+]*?(?:require|import)\s*\(\s*${SPEC}\s*\)`).test(src)) return true;
+  return false;
+}
 export function assertEverySpecUsesTheGuardedTest(specDir = path.join(REPO_ROOT, 'tests', 'e2e')): void {
   const offenders: string[] = [];
 
@@ -362,13 +509,9 @@ export function assertEverySpecUsesTheGuardedTest(specDir = path.join(REPO_ROOT,
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) { walk(full); continue; }
-      if (!/\.spec\.[cm]?tsx?$/.test(entry.name)) continue;
+      if (!COLLECTED_BY_RUNNER.test(entry.name)) continue;
       const src = fs.readFileSync(full, 'utf8');
-      // `import { test ... } from '@playwright/test'` in any spacing or order.
-      for (const m of src.matchAll(/import\s*\{([^}]*)\}\s*from\s*['"]@playwright\/test['"]/g)) {
-        const named = m[1].split(',').map(s => s.trim().split(/\s+as\s+/)[0].trim());
-        if (named.includes('test')) offenders.push(path.relative(REPO_ROOT, full));
-      }
+      if (importsRunnerTest(src)) offenders.push(path.relative(REPO_ROOT, full));
     }
   };
   walk(specDir);

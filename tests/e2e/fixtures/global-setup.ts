@@ -1,6 +1,10 @@
 import { connect, applySchema, resetDatabase, deleteRoom, roomExists } from '../../support/db';
 import { BASE_URL } from '../../support/server';
-import { assertServedBuildMatchesTree, assertEverySpecUsesTheGuardedTest } from './guards';
+import {
+  assertServedBuildMatchesTree,
+  assertEverySpecUsesTheGuardedTest,
+  clearCspRunSink,
+} from './guards';
 
 /**
  * Everything that must be true before the first browser opens.
@@ -21,6 +25,11 @@ export default async function globalSetup(): Promise<void> {
   // 2. R20 - can any spec escape the CSP guard by importing Playwright's own
   //    `test`? Cheap, local, and the only hole in an auto-use fixture.
   assertEverySpecUsesTheGuardedTest();
+
+  // Start from an empty sink so a violation left by a previous run cannot fail
+  // this one, and this run's own violations are the only thing globalTeardown
+  // can find.
+  clearCspRunSink();
 
   // 3. Is the server reading the database this process verified?
   await assertServerReadsTestDatabase();

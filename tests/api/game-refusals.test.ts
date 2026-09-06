@@ -258,19 +258,39 @@ describe('route refusals', () => {
       expect((await apiPost(`/api/game/${roomCode}/advance`, undefined, { 'x-host-token': hostToken })).status).toBe(200);
 
       // Two quotes, so one round: the game is now 'done'.
+      const [before] = await sql<{ updated_at: Date }[]>`select updated_at from game_states where room_code = ${roomCode}`;
       const late = await apiPost(`/api/game/${roomCode}/vote`, { matchupIndex: 0, choice: 'b' }, { 'x-player-token': ada });
       expect(late.status).toBe(409);
+
+      // The status code is half the contract. A refusal that still wrote would
+      // record a vote into the finished game's tallies and move the row's
+      // updated_at, keeping a dead room past the 24h sweep - and the client
+      // would see the same 409 either way. Assert the write did not happen.
+      const [after] = await sql<{ updated_at: Date }[]>`select updated_at from game_states where room_code = ${roomCode}`;
+      expect(after.updated_at.getTime()).toBe(before.updated_at.getTime());
     });
 
-    it('refuses a second /start while voting is open, with 409', async () => {
+    it('refuses a second /start while voting is open, with 409, and re-rolls nothing', async () => {
       const { roomCode, hostToken } = await createRoom();
       await apiPost(`/api/game/${roomCode}/start`, undefined, { 'x-host-token': hostToken });
+      const [before] = await sql<{ updated_at: Date }[]>`select updated_at from game_states where room_code = ${roomCode}`;
+
       expect((await apiPost(`/api/game/${roomCode}/start`, undefined, { 'x-host-token': hostToken })).status).toBe(409);
+
+      // A second start that wrote would rebuild the bracket underneath players
+      // who are mid-vote, discarding the votes already cast.
+      const [after] = await sql<{ updated_at: Date }[]>`select updated_at from game_states where room_code = ${roomCode}`;
+      expect(after.updated_at.getTime()).toBe(before.updated_at.getTime());
     });
 
-    it('refuses /advance from the lobby, with 409', async () => {
+    it('refuses /advance from the lobby, with 409, and writes nothing', async () => {
       const { roomCode, hostToken } = await createRoom();
+      const [before] = await sql<{ updated_at: Date }[]>`select updated_at from game_states where room_code = ${roomCode}`;
+
       expect((await apiPost(`/api/game/${roomCode}/advance`, undefined, { 'x-host-token': hostToken })).status).toBe(409);
+
+      const [after] = await sql<{ updated_at: Date }[]>`select updated_at from game_states where room_code = ${roomCode}`;
+      expect(after.updated_at.getTime()).toBe(before.updated_at.getTime());
     });
   });
 

@@ -21,7 +21,7 @@ import { connect, deleteRoom } from '../../support/db';
  *
  * ── The driver knowledge, expressed once (R16, KTD7) ────────────────────────
  *
- * Seven bespoke driver scripts each re-discovered these, and each cost hours:
+ * Eight bespoke driver scripts each re-discovered these, and each cost hours:
  *
  *  - The join form's fields are `#code` and `#name`, filled by id. There is no
  *    stable accessible name to go by.
@@ -125,6 +125,21 @@ type Fixtures = {
 const PLAYER_VIEWPORT = { width: 390, height: 844 };
 
 /**
+ * The one definition of the defaults.
+ *
+ * Used both as the Playwright option default and as the base of the spread in
+ * the fixture body. It has to be one constant: `test.use` replaces this option
+ * rather than merging into it, so the body re-applies the defaults, and two
+ * hand-written copies drift silently - a file overriding only `players` would
+ * get a quotebook the declaration says it does not.
+ */
+const DEFAULT_GAME_OPTIONS: GameOptions = {
+  players: ['Ana'],
+  quotebook: DEFAULT_QUOTEBOOK,
+  hostViewport: { width: 1440, height: 900 },
+};
+
+/**
  * How long one player is given to work through every matchup of one round.
  *
  * Generous because it spans the player's own 2 s poll landing the new round,
@@ -142,17 +157,15 @@ export const test = guarded.extend<Fixtures>({
    *   test.use({ gameOptions: { players: ['Ana', 'Ben'] } });
    * Merged over the defaults, so a file names only what it cares about.
    */
-  gameOptions: [
-    { players: ['Ana'], quotebook: DEFAULT_QUOTEBOOK, hostViewport: { width: 1440, height: 900 } },
-    { option: true },
-  ],
+  gameOptions: [DEFAULT_GAME_OPTIONS, { option: true }],
 
   game: async ({ browser, gameOptions, cspGuard }, use) => {
-    const options: GameOptions = {
-      players: gameOptions.players ?? ['Ana'],
-      quotebook: gameOptions.quotebook ?? DEFAULT_QUOTEBOOK,
-      hostViewport: gameOptions.hostViewport ?? { width: 1440, height: 900 },
-    };
+    // Spread rather than a field-by-field `??` chain: `test.use` REPLACES this
+    // option instead of merging into it, so the defaults have to be re-applied
+    // here, and they must be the SAME defaults. Written twice they drift, and
+    // the drift is invisible - a file overriding only `players` would silently
+    // get a different quotebook from the one the declaration advertises.
+    const options: GameOptions = { ...DEFAULT_GAME_OPTIONS, ...gameOptions };
 
     const contexts: BrowserContext[] = [];
     const open = async (contextOptions: BrowserContextOptions): Promise<Page> => {
@@ -172,14 +185,25 @@ export const test = guarded.extend<Fixtures>({
     await host.goto('/host');
     await host.fill('#quotebook-text', options.quotebook);
     await expect(host.getByRole('button', { name: 'Create Game' })).toBeEnabled();
+
+    // The room exists the moment the server answers, which is BEFORE the host
+    // finishes navigating to it. Reading the code from the URL afterwards left a
+    // window where a slow navigation threw with the room already created and no
+    // code in hand, so the finally had nothing to delete and the room leaked -
+    // exactly the failure R15 exists to prevent. Arm the response wait first,
+    // then click, and let the try own everything after it.
+    const created = host.waitForResponse(
+      r => r.url().includes('/api/game/create') && r.request().method() === 'POST',
+      { timeout: PHASE_MS },
+    );
     await host.getByRole('button', { name: 'Create Game' }).click();
-    await host.waitForURL(/\/room\/[A-Z]+\/host/, { timeout: PHASE_MS });
 
-    const code = host.url().match(/\/room\/([A-Z]+)\//)![1];
-
-    // From here everything is inside the try, so a failure while players join
-    // still deletes the room the host just created (R15, AE2).
+    let code = '';
     try {
+      const res = await created;
+      code = ((await res.json()) as { roomCode?: string }).roomCode ?? '';
+      await host.waitForURL(/\/room\/[A-Z]+\/host/, { timeout: PHASE_MS });
+      code ||= host.url().match(/\/room\/([A-Z]+)\//)?.[1] ?? '';
       const players: GamePlayer[] = [];
       for (const name of options.players) {
         const page = await open({ viewport: PLAYER_VIEWPORT });
@@ -210,16 +234,35 @@ export const test = guarded.extend<Fixtures>({
       const game = makeGame(code, host, players, openHostView);
       await use(game);
     } finally {
+      // Last resort if the create response never arrived and the navigation
+      // never completed: the host page stores its authority under `uq_host_<CODE>`,
+      // so the key itself names the room even when nothing else does.
+      if (!code) {
+        code = await host
+          .evaluate(() => {
+            for (let i = 0; i < localStorage.length; i++) {
+              const k = localStorage.key(i);
+              if (k?.startsWith('uq_host_')) return k.slice('uq_host_'.length);
+            }
+            return '';
+          })
+          .catch(() => '');
+      }
+
       // Close first so nothing is still polling a room about to vanish, but
       // never let a close failure skip the delete.
       for (const context of contexts) {
         await context.close().catch(() => {});
       }
-      const sql = connect();
-      try {
-        await deleteRoom(sql, code);
-      } finally {
-        await sql.end();
+      // With no code there is nothing to address, and `delete ... where
+      // room_code = ''` would be a silent no-op dressed as cleanup.
+      if (code) {
+        const sql = connect();
+        try {
+          await deleteRoom(sql, code);
+        } finally {
+          await sql.end();
+        }
       }
     }
   },
