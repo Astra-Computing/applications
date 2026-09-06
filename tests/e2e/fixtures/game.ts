@@ -1,4 +1,4 @@
-import { expect, type BrowserContext, type Page } from '@playwright/test';
+import { expect, type BrowserContext, type BrowserContextOptions, type Page } from '@playwright/test';
 import { test as guarded, type CspGuard } from './guards';
 import { connect, deleteRoom } from '../../support/db';
 
@@ -72,7 +72,21 @@ export type Game = {
   startGame(): Promise<void>;
   /** Every player votes every matchup of the round currently on screen. */
   voteRound(): Promise<void>;
-  /** Host presses Show Results, then skips the recap slideshow. */
+  /**
+   * Host presses Show Results and STOPS with the recap on screen.
+   *
+   * Split out of `showResults` for KTD9: `/advance` sets `status='results'` and
+   * mounts the slideshow in the same commit, and the slideshow is
+   * `position:fixed; inset:0` over an opaque background. Anything the results
+   * screen animates on arrival runs to completion behind it and is never seen.
+   * A spec that wants to assert the motion was HELD needs a hook between the
+   * press and the skip, and the only alternative was to re-encode the header
+   * button selector per spec (R16).
+   */
+  showRecap(): Promise<void>;
+  /** Space through the recap until it is gone. Safe when none is showing. */
+  skipSlideshow(): Promise<void>;
+  /** `showRecap()` then `skipSlideshow()`. */
   showResults(): Promise<void>;
   /** Host presses Start Round N. */
   startNextRound(): Promise<void>;
@@ -80,6 +94,21 @@ export type Game = {
   isOver(): Promise<boolean>;
   /** Start, then play whole rounds until a champion. Returns the round count. */
   playToChampion(): Promise<number>;
+  /**
+   * A SECOND host page on this same room, in a context of its own.
+   *
+   * For the one thing a per-file option cannot express: a preference that only
+   * has an observable effect at mount. `_pw_v050.js` measured reduced motion
+   * exactly this way and said why - entrances are only visible while they play,
+   * so the page has to LOAD with the preference set rather than have it toggled
+   * afterwards, and the game has to have been played under normal motion for
+   * there to be a champion screen to load.
+   *
+   * The context is registered with the CSP guard and closed in teardown like
+   * every other one, which is the whole reason this lives in the fixture rather
+   * than in a spec.
+   */
+  openHostView(options?: BrowserContextOptions): Promise<Page>;
 };
 
 type Fixtures = {
@@ -126,8 +155,8 @@ export const test = guarded.extend<Fixtures>({
     };
 
     const contexts: BrowserContext[] = [];
-    const open = async (viewport: { width: number; height: number }): Promise<Page> => {
-      const context = await browser.newContext({ viewport });
+    const open = async (contextOptions: BrowserContextOptions): Promise<Page> => {
+      const context = await browser.newContext(contextOptions);
       contexts.push(context);
       // Every context this fixture makes is registered with the standing CSP
       // guard, not only the one Playwright hands out (KTD5, R20).
@@ -135,7 +164,7 @@ export const test = guarded.extend<Fixtures>({
       return context.newPage();
     };
 
-    const host = await open(options.hostViewport);
+    const host = await open({ viewport: options.hostViewport });
     // Created through the interface rather than through POST /api/game/create,
     // so the fixture exercises the same path a host does - including the
     // in-browser parse of the quotebook, which is where a room can fail to
@@ -153,16 +182,9 @@ export const test = guarded.extend<Fixtures>({
     try {
       const players: GamePlayer[] = [];
       for (const name of options.players) {
-        const page = await open(PLAYER_VIEWPORT);
+        const page = await open({ viewport: PLAYER_VIEWPORT });
         await page.goto(`/join?code=${code}`);
-        // By id. The two inputs carry no accessible name that survives a copy
-        // edit, and every driver that guessed at one broke.
-        await page.fill('#code', code);
-        await page.fill('#name', name);
-        // By type, not by name: the label is "Join →", an arrow one copy edit
-        // away from breaking every driver that matched on it.
-        await page.click('form button[type="submit"]');
-        await page.waitForURL(/\/room\/[A-Z]+\/player/, { timeout: PHASE_MS });
+        await joinRoom(page, code, name);
         players.push({ name, page, context: page.context() });
       }
 
@@ -170,7 +192,22 @@ export const test = guarded.extend<Fixtures>({
       // before it lands hits a disabled button.
       await expect(host.locator('.chip-kick')).toHaveCount(players.length, { timeout: PHASE_MS });
 
-      const game = makeGame(code, host, players);
+      const openHostView = async (contextOptions: BrowserContextOptions = {}): Promise<Page> => {
+        // The host's authority is one localStorage key, and a second tab that
+        // does not carry it renders "This tab isn't the one that created the
+        // game" instead of the room.
+        const token = await host.evaluate(c => localStorage.getItem(`uq_host_${c}`), code);
+        if (!token) throw new Error(`No host token stored for room ${code}.`);
+        const page = await open({ viewport: options.hostViewport, ...contextOptions });
+        await page.addInitScript(
+          ([c, t]: [string, string]) => localStorage.setItem(`uq_host_${c}`, t),
+          [code, token] as [string, string],
+        );
+        await page.goto(`/room/${code}/host`);
+        return page;
+      };
+
+      const game = makeGame(code, host, players, openHostView);
       await use(game);
     } finally {
       // Close first so nothing is still polling a room about to vanish, but
@@ -190,9 +227,35 @@ export const test = guarded.extend<Fixtures>({
 
 export { expect } from './guards';
 
+// ── The join form, in one place ─────────────────────────────────────────────
+
+/**
+ * Fills and submits the join form on a page already sitting on `/join`.
+ *
+ * Exported rather than inlined in the fixture body because a kicked player
+ * REJOINS through this same form (`tests/e2e/room-controls.spec.ts`), and a
+ * second copy of these three selectors is exactly the per-test repetition R16
+ * forbids.
+ */
+export async function joinRoom(page: Page, code: string, name: string): Promise<void> {
+  // By id. The two inputs carry no accessible name that survives a copy edit,
+  // and every driver that guessed at one broke.
+  await page.fill('#code', code);
+  await page.fill('#name', name);
+  // By type, not by name: the label is "Join →", an arrow one copy edit away
+  // from breaking every driver that matched on it.
+  await page.click('form button[type="submit"]');
+  await page.waitForURL(/\/room\/[A-Z]+\/player/, { timeout: PHASE_MS });
+}
+
 // ── The flow, in one place ──────────────────────────────────────────────────
 
-function makeGame(code: string, host: Page, players: GamePlayer[]): Game {
+function makeGame(
+  code: string,
+  host: Page,
+  players: GamePlayer[],
+  openHostView: (options?: BrowserContextOptions) => Promise<Page>,
+): Game {
   const headerButton = host.locator('.round-header .btn-primary');
   const slideshow = host.locator('.slideshow');
 
@@ -221,17 +284,32 @@ function makeGame(code: string, host: Page, players: GamePlayer[]): Game {
     for (const player of players) await voteThroughRound(player, round);
   };
 
-  const showResults = async () => {
+  const showRecap = async () => {
     await expect(headerButton).toContainText('Show Results', { timeout: PHASE_MS });
     await expect(headerButton).toBeEnabled({ timeout: PHASE_MS });
     await headerButton.click();
-    // The recap is up to ~9 s of slideshow. Space skips it - the handler is on
-    // the window in capture phase and preventDefaults, so nothing else sees it.
+    await slideshow.waitFor({ state: 'attached', timeout: PHASE_MS });
+  };
+
+  /**
+   * The recap is up to ~9 s of slideshow. Space skips it - the handler is on
+   * the window in capture phase and preventDefaults, so nothing else sees it.
+   *
+   * Tolerant of there being no slideshow at all, because auto-advance reaches
+   * `results` on its own and a spec driving it cannot know whether the recap has
+   * mounted yet on any given turn of its loop.
+   */
+  const skipSlideshow = async () => {
     await slideshow.waitFor({ state: 'attached', timeout: PHASE_MS }).catch(() => {});
     while ((await slideshow.count()) > 0) {
       await host.keyboard.press('Space');
       await slideshow.waitFor({ state: 'detached', timeout: 15_000 }).catch(() => {});
     }
+  };
+
+  const showResults = async () => {
+    await showRecap();
+    await skipSlideshow();
   };
 
   const startNextRound = async () => {
@@ -255,7 +333,11 @@ function makeGame(code: string, host: Page, players: GamePlayer[]): Game {
     throw new Error(`The game never reached a champion after ${rounds} rounds.`);
   };
 
-  return { code, host, players, startGame, voteRound, showResults, startNextRound, isOver, playToChampion };
+  return {
+    code, host, players,
+    startGame, voteRound, showRecap, skipSlideshow, showResults, startNextRound,
+    isOver, playToChampion, openHostView,
+  };
 }
 
 /**
