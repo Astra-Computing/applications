@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures/guards';
 
 /**
  * The runner's own smoke test (U5), not game coverage.
@@ -12,6 +12,12 @@ import { test, expect } from '@playwright/test';
  *
  * Deliberately thin. The fixtures are U6 and the real whole-game flows are U7;
  * this file should not grow into them.
+ *
+ * It uses no game fixture and builds nothing, which is exactly why it also
+ * stands as the proof for R20: `test` comes from `./fixtures/guards`, so this
+ * spec runs under the standing CSP guard without asking for it and without
+ * mentioning it. Global setup refuses the whole run if any spec imports `test`
+ * from `@playwright/test` instead, which is the only way one could opt out.
  */
 test('the landing page renders from the production build', async ({ page }) => {
   await page.goto('/');

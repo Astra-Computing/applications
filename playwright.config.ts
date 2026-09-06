@@ -54,13 +54,17 @@ import { BASE_URL, TEST_PORT, TEST_ENCRYPTION_KEY } from './tests/support/server
  *    waiting for `db: up` rather than for a port to open.
  *  - The refusal to touch production, via `testConnectionString()` below.
  *
- * Not kept: U4's sentinel probe, which plants a room in the verified test
- * database and refuses to continue unless the running server can read it back.
- * That is proof rather than mechanism - the mechanism, passing the string
- * through `env` below, is identical - but it is proof worth having, and
- * `webServer` has no hook for it. The natural home is an auto-use fixture in
- * U6, which owns `tests/e2e/fixtures/` and `tests/support/db.ts`. Until then a
- * misdirected server shows up as tests failing rather than as a named refusal.
+ * Not kept HERE: U4's sentinel probe, which refuses to continue unless the
+ * running server is provably reading the verified test database. That is proof
+ * rather than mechanism - the mechanism, passing the string through `env` below,
+ * is identical - but it is proof worth having, and `webServer` has no hook for
+ * it.
+ *
+ * U6 picked it up. It now lives in `globalSetup` below, which Playwright runs
+ * AFTER the webServer plugin has built, started and health-checked the server -
+ * so it can ask that server a question. It is stated in the reverse direction
+ * there (the server creates a room, this process looks for the row) because the
+ * runner process cannot load `@/lib/gameState` at all, for the reason above.
  */
 
 /**
@@ -98,6 +102,27 @@ export default defineConfig({
    * file.
    */
   tsconfig: './tsconfig.test.json',
+
+  /**
+   * The refusals that must happen before the first browser opens (U6).
+   *
+   * Runs after `webServer` - Playwright installs webServer as a plugin, and
+   * plugin setup precedes globalSetup in the runner's task list - so all three
+   * checks in there can interrogate the running server:
+   *
+   *  - the served build is the build in the tree (R19, AE4), compared on
+   *    `.next/BUILD_ID` against the build id the served page advertises - under
+   *    the App Router that is `"buildId"` in the RSC flight payload rather than
+   *    a `/_next/static/<buildId>/` path segment - and never on the version
+   *    string, which a rebuild leaves untouched;
+   *  - no spec imports `test` from `@playwright/test` and so escapes the CSP
+   *    guard (R20);
+   *  - the server is reading this test database and not production.
+   *
+   * Here rather than in a fixture because a per-test check is a check that has
+   * already let one test run against the wrong thing (KTD5).
+   */
+  globalSetup: './tests/e2e/fixtures/global-setup.ts',
 
   webServer: {
     command,
@@ -185,11 +210,24 @@ export default defineConfig({
     video: 'retain-on-failure',
 
     /**
-     * Chromium will not start its sandbox as root, and everything here runs as
-     * root inside the dev-env container. Every one of the bespoke drivers this
-     * suite replaces launched with the same flag.
+     * `--no-sandbox`: Chromium will not start its sandbox as root, and
+     * everything here runs as root inside the dev-env container. Every one of
+     * the bespoke drivers this suite replaces launched with the same flag.
+     *
+     * `--disable-dev-shm-usage`: added in U6, measured rather than copied. This
+     * container's `/dev/shm` is Docker's 64 MB default, and Chromium puts its
+     * shared-memory buffers there. The game fixture opens three browser contexts
+     * per test - a host and two players - and 64 MB is not enough for them: the
+     * browser does not crash, it STALLS. A test whose work took 20 s was
+     * reported at 2.3 minutes, entirely inside `browser.newContext()` and the
+     * navigations after it, roughly one run in three, and at 120 s per test that
+     * is an intermittent timeout that looks exactly like a slow server or a
+     * flaky app. With this flag those buffers go to /tmp instead and the same
+     * test runs in 12 s every time. `_pw_v060.js` and `_pw_confetti.js` both
+     * carried it; that knowledge did not survive into the runner, and this is it
+     * arriving.
      */
-    launchOptions: { args: ['--no-sandbox'] },
+    launchOptions: { args: ['--no-sandbox', '--disable-dev-shm-usage'] },
   },
 
   projects: [
