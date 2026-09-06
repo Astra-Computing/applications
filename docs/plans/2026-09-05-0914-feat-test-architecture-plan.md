@@ -483,14 +483,16 @@ All were found during execution on `feat/test-architecture`, 2026-09-05.
   (the eleventh room in an hour), and `/kick` answering 200 for a name nobody
   holds. Asserted as the code actually behaves.
 
-- **The Success Criterion "under 30 seconds" is not met for `npm test`.** The
-  non-browser layers take ~200s, of which ~190s is the `next build` that U4's
-  `globalSetup` runs so the API layer can exercise a production build. The tests
-  themselves take ~8s. `npm run test:unit` alone is ~3s and does meet the spirit
-  of the criterion. Options, none taken unilaterally: accept it; split CI and
-  local so only `test:unit` is the pre-commit gate; or cache the build on a
-  source hash, which reintroduces the stale-build risk the plan is emphatic
-  about. **Open for the user's decision.**
+- **The Success Criterion "under 30 seconds" is met by re-scoping what `npm test`
+  means (resolved 2026-09-06, user's decision).** Running both non-browser layers
+  takes ~230s, of which nearly all is the `next build` that lets the API layer
+  exercise a production build; the tests themselves are ~8s. Rather than cache
+  that build — which would reintroduce the stale-build risk this plan is emphatic
+  about — `npm test` is now the pure-logic layer alone at **~9s**, `npm run
+  test:api` is explicit, and `npm run test:all` runs both. The criterion's
+  reasoning was that a suite nobody runs catches nothing, so the fast gate keeps
+  the name people type; CI carries the API layer on every push and PR in ~70s,
+  which is a better home for it than a pre-commit wait.
 
 - **The suite spends seven of ten room creations per hour.** `/api/game/create` is
   capped in application code, tests send no `x-forwarded-for`, and global setup
@@ -498,9 +500,14 @@ All were found during execution on `feat/test-architecture`, 2026-09-05.
   budget of ten. Roughly three more room-taking tests will trip it, and the
   failure will look like a server fault rather than a budget.
 
-- **R28's required-check setting is not applied.** Marking "Unit tests &
-  typecheck" and "API tests (Postgres)" as required on `main` is a repository
-  settings change, deliberately left for the user.
+- **R28 is satisfied (done 2026-09-06).** A repository ruleset, "Main
+  Protections", requires a pull request, requires "Unit tests & typecheck" and
+  "API tests (Postgres)" by exact name, requires branches to be up to date, and
+  blocks deletion and force-push on `main`. Both halves matter: Vercel deploys on
+  push to `main` independently of Actions, so required checks only gate a deploy
+  because a PR is also required — a direct push would otherwise bypass CI
+  entirely. Note that a ruleset does not appear in the classic
+  `/branches/main/protection` API; query `/rules/branches/main`.
 
 - **One application defect was found and reported rather than fixed**, per the
   plan's stop condition: `/api/game/create` answers **500** for a malformed JSON

@@ -7,9 +7,10 @@
     "build": "node scripts/guard-build.js && next build",
     "build:unguarded": "next build",
     "start": "next start --hostname 0.0.0.0",
-    "test": "vitest run",
+    "test": "npm run test:unit",
     "test:unit": "vitest run --project unit",
     "test:api": "vitest run --project api",
+    "test:all": "vitest run",
     "test:e2e": "playwright test",
     "typecheck:tests": "tsc -p tsconfig.test.json --noEmit"
   },

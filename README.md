@@ -60,31 +60,47 @@ lazily at request time so that builds succeed without credentials.
 
 ## Tests
 
-Three layers. Each runs inside `dev-env`, and the connection string is supplied
-**on the command**, never in a `.env` file — see the warning below, which is the
-single most important thing on this page.
+Three layers, and one command per layer. Each runs inside `dev-env`, and the
+connection string is supplied **on the command**, never in a `.env` file — see
+the warning below, which is the single most important thing on this page.
 
 ```bash
 export UQ_DB=postgres://uq:uq@test-db:5432/uq_test
 
-# everything that needs no browser. Run this before every commit.
+# The pre-commit gate: pure logic, no database, no server. ~3 seconds.
 docker exec -w /workspace/projects/bracketapp-web -e SUPABASE_DB_URL=$UQ_DB \
   dev-env npm test
 
-docker exec ... dev-env npm run test:unit        # pure logic, no database
-docker exec ... dev-env npm run test:api         # routes against Postgres
+docker exec ... dev-env npm run test:api         # routes against Postgres, ~3.5 min
+docker exec ... dev-env npm run test:all         # both of the above
 docker exec ... dev-env npm run typecheck:tests  # tests are typechecked here,
                                                  # never by `next build`
-docker exec ... dev-env npm run test:e2e         # browser layer, ~5 min
+docker exec ... dev-env npm run test:e2e         # browser layer, ~6 min
 ```
 
 From Git Bash on Windows, prefix any `docker exec` carrying an absolute
 container path with `MSYS_NO_PATHCONV=1`, or the path is rewritten.
 
-`npm run test:e2e` is deliberately **not** part of `npm test`: the fast gate has
-to stay fast or people stop running it. Set `UQ_TEST_REUSE_BUILD=1` to skip the
-rebuild while iterating on specs — never for a real verification run, because it
-will serve a `.next` from before your change and report that as fact.
+### Why `npm test` is only the fast layer
+
+A suite nobody runs catches nothing, and that is the only thing this split is
+about. `npm test` is **3 seconds** - short enough to run on every save, let alone
+every commit - and it holds the sharpest tests in the project: the seeded bracket
+invariants, the parser, the prototype-safety guards, and the CSP assertion that
+catches the defect which killed the champion celebration for two releases.
+
+`npm run test:api` is ~3.5 minutes, and almost all of it is a `next build`. That
+build is not waste: a route only behaves like production under `next start`, so
+proving the routes means building them. But it is far too slow to sit in front of
+every commit, and **CI runs it on every push and every pull request in about 70
+seconds** - automatically, on a machine that is not yours. That is the right home
+for it. Run it locally when you have changed a route or the database layer.
+
+`npm run test:e2e` is never part of either: it builds and drives a browser.
+
+Set `UQ_TEST_REUSE_BUILD=1` to skip the rebuild while iterating on specs - never
+for a real verification run, because it will serve a `.next` from before your
+change and report that as fact.
 
 ### The test database
 
