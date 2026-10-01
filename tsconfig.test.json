@@ -17,6 +17,7 @@
   },
   "include": [
     "src/**/*.test.ts",
+    "scripts/**/*.test.ts",
     "tests/**/*.ts",
     "vitest.config.mts",
     "playwright.config.ts"

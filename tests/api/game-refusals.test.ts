@@ -78,13 +78,18 @@ describe('route refusals', () => {
       expect((await apiPost('/api/game/create', { quotes })).status).toBe(400);
     });
 
-    // Characterization, and a discrepancy worth knowing about: /create parses
-    // the body INSIDE its outer try/catch, so a malformed payload lands in the
-    // generic 500 handler. Every other body-reading route (/join, /vote, /kick)
-    // wraps req.json() separately and answers 400. Asserted as it is, not as it
-    // arguably should be — changing it is a src/ change, not a test change.
-    it('answers 500, not 400, on a malformed body', async () => {
-      expect((await apiPost('/api/game/create', '{ not json')).status).toBe(500);
+    // Until 0.6.2, /create parsed the body inside its outer try/catch, so a
+    // malformed payload landed in the generic 500 handler while /join, /vote
+    // and /kick answered 400. It now parses in its own try, like they do.
+    it('refuses a malformed body with 400', async () => {
+      expect((await apiPost('/api/game/create', '{ not json')).status).toBe(400);
+      expect(await countRooms(sql)).toBe(0);
+    });
+
+    // `null` is valid JSON, so it gets past the parse; destructuring it threw
+    // and also reached the 500 handler.
+    it('refuses a JSON null body with 400', async () => {
+      expect((await apiPost('/api/game/create', 'null')).status).toBe(400);
       expect(await countRooms(sql)).toBe(0);
     });
 
