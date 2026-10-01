@@ -21,7 +21,15 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Too many games created. Try again later.' }, { status: 429 });
     }
 
-    const { quotes } = await req.json() as { quotes: Quote[] };
+    // Parsed in its own try, as /join, /vote and /kick do: a malformed body is
+    // the client's fault and answers 400, not the outer handler's 500.
+    let body: { quotes?: Quote[] } | null;
+    try {
+      body = await req.json();
+    } catch {
+      return NextResponse.json({ error: 'Malformed request body' }, { status: 400 });
+    }
+    const quotes = body?.quotes;
     if (!Array.isArray(quotes) || quotes.length < 2) {
       return NextResponse.json({ error: 'Need at least 2 quotes' }, { status: 400 });
     }
