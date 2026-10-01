@@ -132,6 +132,21 @@ export async function deleteRoom(sql: Sql, roomCode: string): Promise<void> {
   await sql`delete from game_states where room_code = ${roomCode.toUpperCase()}`;
 }
 
+/**
+ * Whether one room is stored, asked of the database rather than of the server.
+ *
+ * Two callers, both of which must not go through an HTTP route. The browser
+ * layer's global setup uses it to prove the running server writes to the
+ * database this process verified, and its teardown test uses it to prove a room
+ * really was deleted after a test threw - a question `GET /api/game/<code>` also
+ * answers 404 to when the encryption keys merely disagree.
+ */
+export async function roomExists(sql: Sql, roomCode: string): Promise<boolean> {
+  const rows = await sql<{ one: number }[]>`
+    select 1 as one from game_states where room_code = ${roomCode.toUpperCase()} limit 1`;
+  return rows.length > 0;
+}
+
 export async function countRooms(sql: Sql): Promise<number> {
   const [row] = await sql<{ n: number }[]>`select count(*)::int as n from game_states`;
   return row.n;

@@ -1,0 +1,106 @@
+name: Test
+
+# R22 / KTD8: the layers that need no browser gate every push to the default
+# branch and every pull request. The browser layer is deliberately absent
+# here — it is not run in CI at all (KTD8).
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  # Neither job runs the browser layer, so neither should pay for a Chromium
+  # download during `npm ci` once U5's Playwright dependency lands. This is
+  # Playwright's own documented opt-out and is a harmless no-op today, before
+  # that dependency exists.
+  PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+
+jobs:
+  # Pure logic + typecheck: no services, finishes in seconds (KTD8). Kept as
+  # its own job (rather than folded into api-tests) so this fast feedback
+  # isn't stalled behind the Postgres service and ~3-minute build the API job
+  # pays for below.
+  unit-and-typecheck:
+    name: Unit tests & typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      # R22: the pure-logic layer.
+      - name: Run pure-logic unit tests
+        run: npm run test:unit
+
+      # R27: test files are typechecked by a command that is not the
+      # production build (tsconfig.test.json is excluded from the app's own
+      # tsconfig/build), and that command runs here in CI.
+      - name: Typecheck test files
+        run: npm run typecheck:tests
+
+  # API layer: needs a Postgres service and a built application (KTD8) — a
+  # bounded cost that still gates every push, unlike the browser layer.
+  api-tests:
+    name: API tests (Postgres)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+    env:
+      # A GitHub Actions service container with a mapped port is reachable at
+      # `localhost` from the job on the same runner — this is one of the
+      # hostnames tests/support/db.ts's assertNotProduction allowlists
+      # (test-db, localhost, 127.0.0.1, ::1), so the suite's own refusal-to-run
+      # guard is satisfied rather than bypassed.
+      SUPABASE_DB_URL: postgres://postgres:postgres@localhost:5432/postgres
+      # GAME_ENCRYPTION_KEY is deliberately NOT set here. tests/support/server.ts
+      # overrides it with its own TEST_ENCRYPTION_KEY for both the build and the
+      # server it starts, so a value here would never be read - and a stale copy
+      # of a constant that looks authoritative is worse than no copy at all.
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      # `npm run test:api` runs vitest's "api" project, whose globalSetup
+      # (tests/support/server.ts) owns the whole lifecycle this step relies
+      # on: it builds the application against SUPABASE_DB_URL above, applies
+      # supabase/schema.sql itself (never cron.sql, which needs pg_cron and
+      # is not installed on this stock postgres image), starts `next start`,
+      # polls /api/health until the database is up, and proves the running
+      # server reads this same test database before any test executes.
+      # Nothing here caches .next/cache or reuses a prior build — every run
+      # builds fresh, so the API layer can never be served a stale build.
+      - name: Run API tests (builds and starts the app against Postgres)
+        run: npm run test:api
